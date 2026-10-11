@@ -7,10 +7,11 @@
     "node": ">=22"
   },
   "scripts": {
-    "check": "node --check public/app.js && node --experimental-strip-types --test tests/model-auth.test.mjs",
+    "check": "node --check public/app.js && node --experimental-strip-types --test tests/model-auth.test.mjs tests/calendar.test.mjs tests/frontend.test.mjs",
     "test": "npm run check && node --experimental-strip-types --test tests/image.test.mjs && node --experimental-strip-types --loader ./tests/mock-loader.mjs --test tests/api.test.mjs",
     "dev": "netlify dev",
-    "deploy": "netlify deploy --prod --site b3c674f5-3758-48c2-9e5b-450708f05192"
+    "deploy": "netlify deploy --prod --site b3c674f5-3758-48c2-9e5b-450708f05192",
+    "setup:admin": "node scripts/setup-admin.mjs"
   },
   "dependencies": {
     "@netlify/blobs": "11.1.3",
@@ -18,6 +19,7 @@
     "sharp": "0.35.4"
   },
   "devDependencies": {
+    "jsdom": "^30.1.2",
     "netlify-cli": "^23.0.0"
   }
 }

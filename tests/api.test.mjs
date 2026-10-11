@@ -71,7 +71,7 @@ test('Partial deletion can be retried; tombstone hides evidence and preserves cl
 });
 
 test('Direct environment password authenticates securely and overrides legacy hash',async()=>{
- const direct='test-only-direct-password-123';
+ const direct='short';
  authEnv.CLEANING_ADMIN_PASSWORD=direct;
  try {
   const wrong=await call('auth/login','POST',{password:'incorrect-password'});assert.equal(wrong.status,401);assert.equal(wrong.headers.get('set-cookie'),null);
@@ -83,9 +83,9 @@ test('Direct environment password authenticates securely and overrides legacy ha
   const logout=await api(new Request('https://cleaning.example/api/auth/logout',{method:'POST',headers:{origin:'https://cleaning.example',cookie:setCookie,'x-csrf-token':data.csrf}}),production);assert.equal(logout.status,200);assert.match(logout.headers.get('set-cookie'),/Max-Age=0/);
  } finally {delete authEnv.CLEANING_ADMIN_PASSWORD;}
 });
-test('Short configured direct password fails closed; hash works when direct password is absent',async()=>{
- authEnv.CLEANING_ADMIN_PASSWORD='too-short';
- try {assert.equal((await call('auth/login','POST',{password:'too-short'})).status,503);assert.equal((await call('auth/login','POST',{password})).status,503);}finally{delete authEnv.CLEANING_ADMIN_PASSWORD;}
+test('Oversized direct password fails closed; hash works when direct password is absent',async()=>{
+ authEnv.CLEANING_ADMIN_PASSWORD='x'.repeat(257);
+ try {assert.equal((await call('auth/login','POST',{password:authEnv.CLEANING_ADMIN_PASSWORD})).status,503);assert.equal((await call('auth/login','POST',{password})).status,503);}finally{delete authEnv.CLEANING_ADMIN_PASSWORD;}
  assert.equal((await call('auth/login','POST',{password})).status,200);
  assert.equal((await call('auth/login','POST',{password:'wrong'})).status,401);
 });

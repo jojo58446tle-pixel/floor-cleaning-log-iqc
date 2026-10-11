@@ -7,7 +7,7 @@ export function verifyPassword(password: string, encoded: string) {
 }
 // A configured direct password takes precedence; invalid configuration fails closed.
 export function adminPasswordConfigured(direct: string, hash: string) {
-  return direct !== '' ? direct.length >= 16 && direct.length <= 256 : !!hash;
+  return direct !== '' ? direct.length <= 256 : !!hash;
 }
 export function verifyAdminPassword(password: unknown, direct: string, hash: string) {
   if (typeof password !== 'string' || password.length > 256 || !adminPasswordConfigured(direct, hash)) return false;

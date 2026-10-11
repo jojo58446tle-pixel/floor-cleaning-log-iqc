@@ -1,0 +1,23 @@
+{
+  "name": "floor-cleaning-log-iqc-5s",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "check": "node --check public/app.js && node --experimental-strip-types --test tests/model-auth.test.mjs",
+    "test": "npm run check && node --experimental-strip-types --test tests/image.test.mjs && node --experimental-strip-types --loader ./tests/mock-loader.mjs --test tests/api.test.mjs",
+    "dev": "netlify dev",
+    "deploy": "netlify deploy --prod --site b3c674f5-3758-48c2-9e5b-450708f05192"
+  },
+  "dependencies": {
+    "@netlify/blobs": "11.1.3",
+    "@netlify/functions": "6.0.2",
+    "sharp": "0.35.4"
+  },
+  "devDependencies": {
+    "netlify-cli": "^23.0.0"
+  }
+}

@@ -2,7 +2,7 @@ export const DEFAULT_AREAS = ['IQC Lab Floor', 'IQC Inspection Area', 'Measuring
 export const GROUPS = ['before', 'after', 'additional'] as const;
 export type ImageGroup = typeof GROUPS[number];
 export type Photo = { id: string; fullKey: string; thumbKey: string; width: number; height: number; bytes: number; thumbBytes: number };
-export type RecordData = { id: string; date: string; area: string; activityType: string; startTime: string; endTime: string; note: string; status: 'cleaned'; published: boolean; beforeImages: Photo[]; afterImages: Photo[]; additionalImages: Photo[]; createdAt: string; updatedAt: string };
+export type RecordData = { id: string; date: string; area: string; activityType: string; startTime: string; endTime: string; note: string; status: 'cleaned'; published: boolean; beforeImages: Photo[]; afterImages: Photo[]; additionalImages: Photo[]; createdAt: string; updatedAt: string; deleting?: boolean; pendingImages?: (Photo & {group: ImageGroup; batch: string})[]; cleanupKeys?: string[] };
 export function validDate(value: string) {
   const parsed = new Date(value);
   return /^\d{4}-\d{2}-\d{2}$/.test(value) && value >= '2000-01-01' && value <= '2199-12-31' && Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
@@ -11,7 +11,7 @@ export function validMonth(value: string) { return /^\d{4}-(0[1-9]|1[0-2])$/.tes
 export function recordKey(date: string, id: string) { return `records/${date.replaceAll('-', '/')}/${id}.json`; }
 export function images(record: RecordData) { return GROUPS.flatMap(g => record[`${g}Images`]); }
 export function summary(records: RecordData[], month: string) {
-  const rows = records.filter(r => r.published && r.date.startsWith(month));
+  const rows = records.filter(r => r.published && !r.deleting && r.date.startsWith(month));
   const days = new Set(rows.map(r => r.date)).size;
   const [year, m] = month.split('-').map(Number);
   const daysInMonth = new Date(Date.UTC(year, m, 0)).getUTCDate();

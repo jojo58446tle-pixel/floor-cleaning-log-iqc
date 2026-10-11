@@ -45,7 +45,7 @@ function calendar(){
  }
  const trailing=(7-(offset+days)%7)%7;
  for(let i=0;i<trailing;i++)cells+='<div class="day empty" aria-hidden="true"></div>';
- $('#content').innerHTML=`<div class="panel"><div class="panel-heading"><h3>${monthName(state.month)}</h3><div class="legend"><span><i class="dot green"></i>Cleaned</span><span><i class="dot gray"></i>No activity</span><span><i class="dot blue"></i>Today</span><span><i class="dot pink"></i>Holiday</span></div></div><div class="calendar-scroll"><div class="weekdays">${['MON','TUE','WED','THU','FRI','SAT','SUN'].map(d=>`<span>${d}</span>`).join('')}</div><div class="calendar">${cells}</div></div></div><p class="muted">Select a date to view Before / After evidence.${state.admin?' Draft activities are visible only to Admin.':''} Cleaning rate = days with published evidence ÷ calendar days in the selected month. Holidays are configured by Admin.</p>`;
+ $('#content').innerHTML=`<div class="panel"><div class="panel-heading"><h3>${monthName(state.month)}</h3><div class="legend"><span><i class="dot green"></i>Cleaned</span><span><i class="dot gray"></i>No activity</span><span><i class="dot blue"></i>Today</span><span><i class="dot pink"></i>Holiday</span></div></div><div class="calendar-scroll"><div class="weekdays">${['MON','TUE','WED','THU','FRI','SAT','SUN'].map(d=>`<span>${d}</span>`).join('')}</div><div class="calendar">${cells}</div></div></div><p class="muted">Select a date to view cleaning photo evidence.${state.admin?' Draft activities are visible only to Admin.':''} Cleaning rate = days with published evidence ÷ calendar days in the selected month. Holidays are configured by Admin.</p>`;
  $('#content').querySelectorAll('[data-date]').forEach(b=>b.onclick=()=>openDetail(b.dataset.date));
 }
 function gallery(){
@@ -97,7 +97,7 @@ function drawPreview(group){const saved=(editing||draft)?.[group+'Images']||[];c
  for(const p of saved.filter(p=>!removed.has(p.id))){const r=editing||draft,wrap=document.createElement('span');wrap.className='preview-item';wrap.innerHTML=`<img src="${imageUrl(r,p)}" alt="${group} photo"><button type="button" aria-label="Remove photo">✕</button>`;wrap.querySelector('button').onclick=()=>{removed.add(p.id);drawPreview(group);};box.append(wrap);}
  queued[group].forEach((file,i)=>{const wrap=document.createElement('span');wrap.className='preview-item';const objectUrl=URL.createObjectURL(file);previewUrls.push(objectUrl);wrap.innerHTML=`<img alt="Selected ${group} photo"><button type="button" aria-label="Remove selected photo">✕</button>`;wrap.querySelector('img').src=objectUrl;wrap.querySelector('button').onclick=()=>{queued[group].splice(i,1);drawPreview(group);};box.append(wrap);});
 }
-groups.forEach(g=>$('#'+g+'-input').onchange=e=>{queued[g].push(...e.target.files);e.target.value='';drawPreview(g);});
+document.querySelectorAll('[data-photo-group]').forEach(input=>input.onchange=e=>{const g=input.dataset.photoGroup;queued[g].push(...e.target.files);e.target.value='';drawPreview(g);});
 async function mobileImage(file){
  if(file.size>40000000)throw new Error('Photo exceeds 40 MB. Export a smaller JPEG.');
  let bitmap;try{bitmap=await createImageBitmap(file,{imageOrientation:'from-image'});}catch{throw new Error('This phone photo cannot be opened. Export HEIC as JPEG and try again.');}
@@ -108,7 +108,7 @@ async function mobileImage(file){
 }
 $('#record-form').onsubmit=async e=>{
  e.preventDefault();if(busy)return;const form=e.target,base=editing||draft;const has=g=>(base?.[g+'Images']||[]).filter(p=>!removed.has(p.id)).length+queued[g].length;
- if(!has('before')||!has('after')){$('#editor-status').textContent='Add at least one Before and one After photo to publish this activity.';return;}
+ if(!groups.some(g=>has(g))){$('#editor-status').textContent='Add at least one cleaning photo to publish this activity.';return;}
  if(groups.reduce((n,g)=>n+has(g),0)>30){$('#editor-status').textContent='Maximum 30 photos per activity.';return;}
  const fields=Object.fromEntries(new FormData(form));fields.date=form.elements.date.value;
  busy=true;$('#save-record').disabled=true;$('#cancel-editor').disabled=true;$('#discard').disabled=true;for(const input of form.querySelectorAll('input,select,textarea'))input.disabled=true;

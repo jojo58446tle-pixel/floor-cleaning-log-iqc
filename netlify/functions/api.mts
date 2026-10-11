@@ -130,10 +130,10 @@ export default async (req: Request, context: Context) => {
         if (images(next).length > 30) fail('Maximum 30 photos per activity.');
         next.cleanupKeys = [...(record.cleanupKeys || []), ...[...images(record), ...pending].filter(p => removed.has(p.id)).flatMap(p => [p.fullKey,p.thumbKey])];
         if (body.publish === true) {
-          if (!next.beforeImages.length || !next.afterImages.length) fail('Before and After photo evidence is required to publish.');
+          if (!images(next).length) fail('Add at least one cleaning photo to publish.');
           next.published = true;
         }
-        if (next.published && (!next.beforeImages.length || !next.afterImages.length)) fail('Published records must keep Before and After photo evidence.');
+        if (next.published && (!images(next).length)) fail('Published records must keep at least one cleaning photo.');
         const saved = await store.setJSON(key, next, { onlyIfMatch: entry.etag });
         if (!saved.modified) fail('This record changed. Reload before editing.', 409);
         // Publication already succeeded. Keep cleanup keys for a later retry if storage fails.

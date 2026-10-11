@@ -38,3 +38,34 @@ test('Dashboard is the only navigation page; Calendar, Detail and Image Viewer w
  d.querySelector('#today').click();await until(()=>d.querySelector('.calendar'));
  assert.equal(requests.some(path=>path.startsWith('/api/statistics?')),false);assert.equal(d.querySelector('#message').hidden,true);dom.window.close();
 });
+
+test('Admin can select one mobile camera photo and publish; empty activity is rejected',async()=>{
+ const dom=new JSDOM(html,{url:'https://cleaning.example/',runScripts:'outside-only'}),w=dom.window,d=w.document,requests=[];
+ w.HTMLDialogElement.prototype.showModal=function(){this.open=true;};
+ w.HTMLDialogElement.prototype.close=function(){this.open=false;this.dispatchEvent(new w.Event('close'));};
+ w.URL.createObjectURL=()=> 'blob:test-photo';w.URL.revokeObjectURL=()=>{};
+ w.createImageBitmap=async()=>({width:4000,height:3000,close(){}});
+ w.HTMLCanvasElement.prototype.getContext=()=>({drawImage(){}});
+ w.HTMLCanvasElement.prototype.toBlob=function(cb,type,quality){assert.equal(this.width,1920);assert.equal(this.height,1440);assert.equal(type,'image/webp');assert.equal(quality,.8);cb(new w.Blob(['compressed'],{type}));};
+ w.fetch=async(path,options={})=>{
+  requests.push({path,...options});let data;
+  if(path==='/api/auth/session')data={authenticated:true,csrf:'test-csrf'};
+  else if(path==='/api/settings')data={areas:['IQC Lab Floor'],holidays:[]};
+  else if(path.startsWith('/api/records?'))data={records:[],summary};
+  else if(path==='/api/records')data={record:{...record,published:false,beforeImages:[],afterImages:[]}};
+  else if(path.startsWith('/api/upload?'))data={record:{...record,beforeImages:[],afterImages:[photo]}};
+  else if(path.startsWith('/api/record?'))data={record:{...record,beforeImages:[],afterImages:[photo]}};
+  else throw new Error('Unexpected request '+path);
+  return{ok:true,status:200,json:async()=>data};
+ };
+ await w.eval('(async()=>{'+script+'})()');d.querySelector('#add').click();
+ const form=d.querySelector('#record-form');form.dispatchEvent(new w.Event('submit',{cancelable:true}));
+ assert.match(d.querySelector('#editor-status').textContent,/at least one cleaning photo/);
+ assert.equal(requests.some(r=>r.method==='POST'),false);
+ const camera=d.querySelector('#after-camera');assert.equal(camera.getAttribute('capture'),'environment');
+ assert.equal(d.querySelector('#after-input').hasAttribute('capture'),false);
+ Object.defineProperty(camera,'files',{value:[new w.File(['phone-photo'],'phone.jpg',{type:'image/jpeg'})]});camera.dispatchEvent(new w.Event('change'));
+ form.dispatchEvent(new w.Event('submit',{cancelable:true}));await until(()=>!d.querySelector('#editor').open);
+ const upload=requests.find(r=>r.path.startsWith('/api/upload?'));assert.ok(upload.path.includes('group=after'));assert.equal(upload.body.type,'image/webp');
+ assert.ok(requests.some(r=>r.method==='PUT'&&JSON.parse(r.body).publish===true));dom.window.close();
+});

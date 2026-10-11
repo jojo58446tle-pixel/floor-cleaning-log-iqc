@@ -89,3 +89,18 @@ test('Oversized direct password fails closed; hash works when direct password is
  assert.equal((await call('auth/login','POST',{password})).status,200);
  assert.equal((await call('auth/login','POST',{password:'wrong'})).status,401);
 });
+
+test('One photo in any group publishes; the last published photo cannot be removed',async()=>{
+ for(const group of ['before','after','additional']){
+  reset();await login();let record=(await(await call('records','POST',fields,true)).json()).record;
+  const ref=new URLSearchParams({date:record.date,id:record.id}).toString();
+  const photo=await sharp({create:{width:800,height:600,channels:3,background:'#6789ab'}}).jpeg().toBuffer();
+  record=(await(await call('upload?'+ref+'&group='+group,'POST',photo,true)).json()).record;
+  const published=await call('record?'+ref,'PUT',{...fields,updatedAt:record.updatedAt,publish:true},true);
+  assert.equal(published.status,200);record=(await published.json()).record;
+  assert.equal((await(await call('records?month=2026-10')).json()).summary.photosUploaded,1);
+  const remove=await call('record?'+ref,'PUT',{...fields,updatedAt:record.updatedAt,removeImageIds:[record[group+'Images'][0].id]},true);
+  assert.equal(remove.status,400);
+  assert.equal((await(await call('record?'+ref)).json()).record[group+'Images'].length,1);
+ }
+});

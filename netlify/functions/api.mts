@@ -2,7 +2,7 @@ import type { Context, Config } from '@netlify/functions';
 import { getStore, getDeployStore } from '@netlify/blobs';
 import { randomUUID } from 'node:crypto';
 import { DEFAULT_AREAS, GROUPS, images, recordKey, summary, validDate, validMonth, validateFields, type RecordData, type ImageGroup } from '../lib/model.ts';
-import { cookieHeader, makeSession, readSession, sameOrigin, verifyPassword } from '../lib/auth.ts';
+import { cookieHeader, makeSession, readSession, sameOrigin, adminPasswordConfigured, verifyAdminPassword } from '../lib/auth.ts';
 import { optimizeImage } from '../lib/image.ts';
 
 function json(data: unknown, status = 200, cache = false, extra = {}) {
@@ -43,14 +43,15 @@ export default async (req: Request, context: Context) => {
     const store = production ? getStore({ name: 'cleaning-log', consistency: 'strong' }) : getDeployStore({ name: 'cleaning-log', consistency: 'strong' });
     const secret = Netlify.env.get('CLEANING_SESSION_SECRET') || '';
     const hash = Netlify.env.get('CLEANING_ADMIN_PASSWORD_HASH') || '';
+    const directPassword = Netlify.env.get('CLEANING_ADMIN_PASSWORD') || '';
     const session = readSession(req.headers.get('cookie') || '', secret);
     const write = !['GET', 'HEAD'].includes(req.method);
     if (write && !sameOrigin(req)) return json({ error: 'Same-origin request required.' }, 403);
     if (action === 'auth/login' && req.method === 'POST') {
-      if (secret.length < 32 || !hash) return json({ error: 'Admin authentication has not been configured.' }, 503);
+      if (secret.length < 32 || !adminPasswordConfigured(directPassword, hash)) return json({ error: 'Admin authentication has not been configured.' }, 503);
       if (Number(req.headers.get('content-length') || 0) > 2048) fail('Request too large.', 413);
       const { password } = await req.json();
-      if (typeof password !== 'string' || !verifyPassword(password, hash)) return json({ error: 'Incorrect admin password.' }, 401);
+      if (!verifyAdminPassword(password, directPassword, hash)) return json({ error: 'Incorrect admin password.' }, 401);
       const next = makeSession(secret);
       return json({ authenticated: true, csrf: next.csrf }, 200, false, { 'Set-Cookie': cookieHeader(next.token) });
     }

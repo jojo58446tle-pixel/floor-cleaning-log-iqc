@@ -5,7 +5,8 @@ import sharp from 'sharp';
 import api from '../netlify/functions/api.mts';
 import { reset,stores,failNextDelete } from './memory-blobs.mjs';
 const secret='test-session-secret-'.repeat(3),salt='unit-tests',password='test-password';
-globalThis.Netlify={env:{get:key=>key==='CLEANING_SESSION_SECRET'?secret:key==='CLEANING_ADMIN_PASSWORD_HASH'?salt+':'+scryptSync(password,salt,64).toString('hex'):''}};
+const authEnv={CLEANING_SESSION_SECRET:secret,CLEANING_ADMIN_PASSWORD_HASH:salt+':'+scryptSync(password,salt,64).toString('hex')};
+globalThis.Netlify={env:{get:key=>authEnv[key]||''}};
 const production={deploy:{context:'production'}};
 let cookie='',csrf='';
 const fields={date:'2026-10-07',area:'IQC Lab Floor',activityType:'Floor Cleaning',startTime:'09:30',endTime:'10:20',note:'Integration fixture — not a real cleaning record'};
@@ -67,4 +68,24 @@ test('Partial deletion can be retried; tombstone hides evidence and preserves cl
  assert.equal((await(await call('records?month=2026-10','GET',undefined,true)).json()).records.length,1);
  assert.equal((await call('record?'+ref,'DELETE',undefined,true)).status,200);
  assert.equal(stores.get('production:cleaning-log').size,0);
+});
+
+test('Direct environment password authenticates securely and overrides legacy hash',async()=>{
+ const direct='test-only-direct-password-123';
+ authEnv.CLEANING_ADMIN_PASSWORD=direct;
+ try {
+  const wrong=await call('auth/login','POST',{password:'incorrect-password'});assert.equal(wrong.status,401);assert.equal(wrong.headers.get('set-cookie'),null);
+  assert.equal((await call('auth/login','POST',{password})).status,401);
+  const correct=await call('auth/login','POST',{password:direct});assert.equal(correct.status,200);
+  const data=await correct.json();assert.equal(data.authenticated,true);assert.equal(JSON.stringify(data).includes(direct),false);assert.equal(JSON.stringify(data).includes(authEnv.CLEANING_ADMIN_PASSWORD_HASH),false);
+  const setCookie=correct.headers.get('set-cookie');assert.match(setCookie,/HttpOnly/);assert.match(setCookie,/Secure/);assert.equal(setCookie.includes(direct),false);
+  const session=await api(new Request('https://cleaning.example/api/auth/session',{headers:{cookie:setCookie}}),production);assert.equal((await session.json()).authenticated,true);
+  const logout=await api(new Request('https://cleaning.example/api/auth/logout',{method:'POST',headers:{origin:'https://cleaning.example',cookie:setCookie,'x-csrf-token':data.csrf}}),production);assert.equal(logout.status,200);assert.match(logout.headers.get('set-cookie'),/Max-Age=0/);
+ } finally {delete authEnv.CLEANING_ADMIN_PASSWORD;}
+});
+test('Short configured direct password fails closed; hash works when direct password is absent',async()=>{
+ authEnv.CLEANING_ADMIN_PASSWORD='too-short';
+ try {assert.equal((await call('auth/login','POST',{password:'too-short'})).status,503);assert.equal((await call('auth/login','POST',{password})).status,503);}finally{delete authEnv.CLEANING_ADMIN_PASSWORD;}
+ assert.equal((await call('auth/login','POST',{password})).status,200);
+ assert.equal((await call('auth/login','POST',{password:'wrong'})).status,401);
 });

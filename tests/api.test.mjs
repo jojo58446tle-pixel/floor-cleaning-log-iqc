@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { scryptSync } from 'node:crypto';
 import sharp from 'sharp';
 import api from '../netlify/functions/api.mts';
-import { reset,stores } from './memory-blobs.mjs';
+import { reset,stores,failNextDelete } from './memory-blobs.mjs';
 const secret='test-session-secret-'.repeat(3),salt='unit-tests',password='test-password';
 globalThis.Netlify={env:{get:key=>key==='CLEANING_SESSION_SECRET'?secret:key==='CLEANING_ADMIN_PASSWORD_HASH'?salt+':'+scryptSync(password,salt,64).toString('hex'):''}};
 const production={deploy:{context:'production'}};
@@ -33,3 +33,38 @@ test('draft → actual image conversion → publication → read → edit → de
  assert.equal([...stores.get('production:cleaning-log').keys()].filter(k=>k.startsWith('records/')||k.startsWith('images/')).length,0);
 });
 test('Preview records are isolated from production store',async()=>{reset();await login();await call('records','POST',fields,true,{deploy:{context:'deploy-preview'}});assert.equal((await(await call('records?month=2026-10','GET',undefined,true)).json()).records.length,0);assert.equal((await(await call('records?month=2026-10','GET',undefined,true,{deploy:{context:'deploy-preview'}})).json()).records.length,1);});
+
+async function publishedFixture(){
+ reset();await login();let record=(await(await call('records','POST',fields,true)).json()).record;
+ const ref=new URLSearchParams({date:record.date,id:record.id}).toString();
+ const photo=await sharp({create:{width:600,height:800,channels:3,background:'#789abc'}}).jpeg().toBuffer();
+ for(const group of ['before','after'])record=(await(await call('upload?'+ref+'&group='+group,'POST',photo,true)).json()).record;
+ record=(await(await call('record?'+ref,'PUT',{...fields,updatedAt:record.updatedAt,publish:true},true)).json()).record;
+ return{record,ref,photo};
+}
+test('Published edit uploads stay private until Save; Cancel removes only its batch',async()=>{
+ const {ref,photo}=await publishedFixture();const batch='11111111-1111-1111-1111-111111111111';
+ const uploaded=await call('upload?'+ref+'&group=before&editBatch='+batch,'POST',photo,true);assert.equal(uploaded.status,201);
+ const {record,photo:added}=await uploaded.json();assert.equal(record.beforeImages.length,2);
+ const publicRecord=(await(await call('record?'+ref)).json()).record;assert.equal(publicRecord.beforeImages.length,1);assert.equal(publicRecord.pendingImages,undefined);
+ assert.equal((await call('image?'+ref+'&photo='+added.id)).status,404);
+ assert.equal((await call('image?'+ref+'&photo='+added.id,'GET',undefined,true)).status,200);
+ assert.equal((await call('discard-uploads?'+ref,'POST',{editBatch:batch},true)).status,200);
+ assert.equal((await call('image?'+ref+'&photo='+added.id,'GET',undefined,true)).status,404);
+ assert.equal((await(await call('records?month=2026-10')).json()).summary.photosUploaded,2);
+});
+test('Save publishes the selected edit batch and updates real statistics',async()=>{
+ const {ref,photo}=await publishedFixture();const batch='22222222-2222-2222-2222-222222222222';
+ const uploaded=await call('upload?'+ref+'&group=after&editBatch='+batch,'POST',photo,true);const {record}=await uploaded.json();
+ assert.equal((await call('record?'+ref,'PUT',{...fields,updatedAt:record.updatedAt,publish:true,editBatch:batch},true)).status,200);
+ assert.equal((await(await call('records?month=2026-10')).json()).summary.photosUploaded,3);
+});
+test('Partial deletion can be retried; tombstone hides evidence and preserves cleanup references',async()=>{
+ const {ref}=await publishedFixture();failNextDelete('images/');
+ assert.equal((await call('record?'+ref,'DELETE',undefined,true)).status,500);
+ assert.equal((await call('record?'+ref)).status,404);
+ assert.equal((await(await call('records?month=2026-10')).json()).summary.totalActivities,0);
+ assert.equal((await(await call('records?month=2026-10','GET',undefined,true)).json()).records.length,1);
+ assert.equal((await call('record?'+ref,'DELETE',undefined,true)).status,200);
+ assert.equal(stores.get('production:cleaning-log').size,0);
+});

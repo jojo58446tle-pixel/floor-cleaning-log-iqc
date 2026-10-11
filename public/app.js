@@ -6,6 +6,7 @@ const fmt = date => new Date(date+'T12:00:00').toLocaleDateString('en-GB',{day:'
 const monthName = m => new Date(m+'-01T12:00:00').toLocaleDateString('en-GB',{month:'long',year:'numeric'});
 let state = {page:'calendar',month:today().slice(0,7),records:[],settings:{areas:[],holidays:[]},admin:false,csrf:null,summary:null};
 let loadGeneration = 0, viewerPhotos = [], viewerIndex = 0, zoom = 1, editing = null, draft = null, busy = false;
+let editSession = null;
 let queued = {before:[],after:[],additional:[]}, removed = new Set(), previewUrls = [];
 const titles = {calendar:'Cleaning calendar',gallery:'Photo evidence gallery',statistics:'Cleaning statistics',area:'IQC cleaning areas',about:'About this log'};
 const imageUrl = (r,p,size='thumb') => `/api/image?${new URLSearchParams({date:r.date,id:r.id,photo:p.id,size})}`;
@@ -13,7 +14,7 @@ function photos(records=state.records) {return records.filter(r=>r.published).fl
 async function api(path,options={}) {
  const headers = {...(options.body && typeof options.body==='string'?{'Content-Type':'application/json'}:{}),...(options.method && options.method!=='GET'?{'X-CSRF-Token':state.csrf||''}:{}),...options.headers};
  const res = await fetch('/api/'+path,{credentials:'same-origin',...options,headers});
- const body = await res.json(); if(!res.ok) throw new Error(body.error || 'Request failed.'); return body;
+ let body;try{body=await res.json();}catch{throw new Error('API returned HTTP '+res.status+' without JSON. Check the Netlify Functions deployment.');} if(!res.ok) throw new Error(body.error || 'Request failed.'); return body;
 }
 function notice(message){$('#message').hidden=!message;$('#message').textContent=message||'';}
 function options(values,first){return (first?`<option value="">${esc(first)}</option>`:'')+values.map(v=>`<option>${esc(v)}</option>`).join('');}
@@ -42,7 +43,8 @@ function calendar(){
    const date=`${state.month}-${String(day).padStart(2,'0')}`,rows=state.records.filter(r=>r.date===date),published=rows.filter(r=>r.published),r=published[0]||rows[0],p=r&&(r.afterImages[0]||r.beforeImages[0]);
    cells+=`<button class="day ${rows.length?'has-record':''} ${date===today()?'today':''} ${state.settings.holidays.includes(date)?'holiday':''}" data-date="${date}" aria-label="${esc(fmt(date))}, ${published.length} published activities"><span class="number">${day}${date===today()?'<small>Today</small>':''}</span>${r?`${p?`<img class="thumb" src="${imageUrl(r,p)}" alt="${esc(r.area)} photo evidence" loading="lazy" decoding="async">`:''}<span class="activity">${esc(r.activityType)}</span><span class="area">${esc(r.area)}</span><span class="badge ${r.published?'':'draft'}">${r.published?'✓ Cleaned':'Draft · Not public'}</span>${rows.length>1?`<span class="count">${rows.length} Activities</span>`:''}`:`<span class="no-activity">${state.settings.holidays.includes(date)?'Holiday':'No activity'}</span>`}</button>`;
  }
- while((offset+days)%7!==0){cells+='<div class="day empty" aria-hidden="true"></div>';days++;}
+ const trailing=(7-(offset+days)%7)%7;
+ for(let i=0;i<trailing;i++)cells+='<div class="day empty" aria-hidden="true"></div>';
  $('#content').innerHTML=`<div class="panel"><div class="panel-heading"><h3>${monthName(state.month)}</h3><div class="legend"><span><i class="dot green"></i>Cleaned</span><span><i class="dot gray"></i>No activity</span><span><i class="dot blue"></i>Today</span><span><i class="dot pink"></i>Holiday</span></div></div><div class="calendar-scroll"><div class="weekdays">${['MON','TUE','WED','THU','FRI','SAT','SUN'].map(d=>`<span>${d}</span>`).join('')}</div><div class="calendar">${cells}</div></div></div><p class="muted">Select a date to view Before / After evidence.${state.admin?' Draft activities are visible only to Admin.':''} Cleaning rate = days with published evidence ÷ calendar days in the selected month. Holidays are configured by Admin.</p>`;
  $('#content').querySelectorAll('[data-date]').forEach(b=>b.onclick=()=>openDetail(b.dataset.date));
 }
@@ -83,8 +85,8 @@ $('#photo-next').onclick=()=>nextPhoto(1);$('#photo-prev').onclick=()=>nextPhoto
 document.addEventListener('keydown',e=>{if($('#viewer').open){if(e.key==='ArrowRight')nextPhoto(1);if(e.key==='ArrowLeft')nextPhoto(-1);}});
 $('#viewer').addEventListener('close',()=>{$('#full-image').removeAttribute('src');viewerPhotos=[];});
 function resetPreviews(){previewUrls.forEach(URL.revokeObjectURL);previewUrls=[];}
-function openEditor(record=null,date=today()){
- if(!state.admin)return;editing=record;draft=null;busy=false;queued={before:[],after:[],additional:[]};removed=new Set();resetPreviews();
+async function openEditor(record=null,date=today()){
+ if(!state.admin)return;draft=null;editSession=record?sessionStorage.getItem('cleaning-edit:'+record.id)||crypto.randomUUID():crypto.randomUUID();if(record){sessionStorage.setItem('cleaning-edit:'+record.id,editSession);try{record=(await api('record?'+new URLSearchParams({date:record.date,id:record.id,editBatch:editSession}))).record;}catch(e){notice(e.message);return;}}editing=record;busy=false;queued={before:[],after:[],additional:[]};removed=new Set();resetPreviews();
  const f=$('#record-form');f.reset();$('#editor-title').textContent=record?'Edit cleaning activity':'Add cleaning activity';
  f.elements.area.innerHTML=options([...new Set([...state.settings.areas,...(record?[record.area]:[])])]);
  f.elements.date.value=record?.date||date;f.elements.date.disabled=!!record;f.elements.area.value=record?.area||state.settings.areas[0];
@@ -115,13 +117,13 @@ $('#record-form').onsubmit=async e=>{
    const prepared={};for(const g of groups){prepared[g]=[];for(let i=0;i<queued[g].length;i++){$('#editor-status').textContent=`Preparing ${g} photo ${i+1}…`;prepared[g].push(await mobileImage(queued[g][i]));}}
    if(!base){$('#editor-status').textContent='Creating activity…';draft=(await api('records',{method:'POST',body:JSON.stringify(fields)})).record;}
    let current=editing||draft;
-   for(const g of groups){while(prepared[g].length){$('#editor-status').textContent=`Uploading ${g} photo…`;const result=await api('upload?'+new URLSearchParams({date:current.date,id:current.id,group:g}),{method:'POST',body:prepared[g][0],headers:{'Content-Type':'image/webp'}});current=result.record;if(editing)editing=current;else draft=current;prepared[g].shift();queued[g].shift();}}
-   $('#editor-status').textContent='Saving photo evidence…';await api('record?'+new URLSearchParams({date:current.date,id:current.id}),{method:'PUT',body:JSON.stringify({...fields,updatedAt:current.updatedAt,publish:true,removeImageIds:[...removed]})});
-   draft=null;editing=null;busy=false;$('#editor').close();resetPreviews();state.month=fields.date.slice(0,7);await load();
+   for(const g of groups){while(prepared[g].length){$('#editor-status').textContent=`Uploading ${g} photo…`;const result=await api('upload?'+new URLSearchParams({date:current.date,id:current.id,group:g,editBatch:editSession}),{method:'POST',body:prepared[g][0],headers:{'Content-Type':'image/webp'}});current=result.record;if(editing)editing=current;else draft=current;prepared[g].shift();queued[g].shift();}}
+   $('#editor-status').textContent='Saving photo evidence…';await api('record?'+new URLSearchParams({date:current.date,id:current.id}),{method:'PUT',body:JSON.stringify({...fields,updatedAt:current.updatedAt,publish:true,editBatch:editSession,removeImageIds:[...removed]})});
+   sessionStorage.removeItem('cleaning-edit:'+current.id);draft=null;editing=null;busy=false;$('#editor').close();resetPreviews();state.month=fields.date.slice(0,7);await load();
  }catch(err){$('#editor-status').textContent=err.message+' Uploaded photos are retained so you can retry.';groups.forEach(drawPreview);}
  finally{busy=false;$('#save-record').disabled=false;$('#cancel-editor').disabled=false;$('#discard').disabled=false;for(const input of form.querySelectorAll('input,select,textarea'))input.disabled=false;form.elements.date.disabled=!!(editing||draft);}
 };
-async function cancelEditor(){if(busy)return;if(draft){try{await api('record?'+new URLSearchParams({date:draft.date,id:draft.id}),{method:'DELETE'});draft=null;}catch(e){$('#editor-status').textContent='Draft could not be removed: '+e.message;return;}}$('#editor').close();resetPreviews();await load();}
+async function cancelEditor(){if(busy)return;if(editing?.published){try{await api('discard-uploads?'+new URLSearchParams({date:editing.date,id:editing.id}),{method:'POST',body:JSON.stringify({editBatch:editSession})});}catch(e){$('#editor-status').textContent='Uploads could not be discarded: '+e.message;return;}}if(draft){try{await api('record?'+new URLSearchParams({date:draft.date,id:draft.id}),{method:'DELETE'});draft=null;}catch(e){$('#editor-status').textContent='Draft could not be removed: '+e.message;return;}}if(editing)sessionStorage.removeItem('cleaning-edit:'+editing.id);$('#editor').close();resetPreviews();await load();}
 $('#cancel-editor').onclick=cancelEditor;$('#discard').onclick=cancelEditor;$('#editor').addEventListener('cancel',e=>{e.preventDefault();cancelEditor();});
 $('#add').onclick=()=>openEditor();
 document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>$('#'+b.dataset.close).close());

@@ -2,21 +2,20 @@
 
 Public monthly cleaning calendar with Before / After evidence. Frontend: Netlify. Backend: Netlify Functions. All records, settings, full WebP photos and thumbnails: Netlify Blobs. No Supabase or external database.
 
-## Current delivery state
+## Project
 
-- Netlify project created: `floor-cleaning-log-iqc-5s`
-- Project ID: `b3c674f5-3758-48c2-9e5b-450708f05192`
-- Project administration: https://app.netlify.com/projects/floor-cleaning-log-iqc-5s
-- Intended production URL: https://floor-cleaning-log-iqc-5s.netlify.app
-- Source implemented and local checks pass; production is **not deployed or validated**.
-- The connected Netlify tools do not expose deployment or site environment writes. The workspace has no Netlify CLI authorization, and npm registry access is blocked. Do not recreate the project while resuming this task.
-- No external Git repository was created or connected. This source archive is the durable handoff. Create a separate repository for this project when provider access is available.
+- Repository: https://github.com/jojo58446tle-pixel/floor-cleaning-log-iqc
+- Existing Netlify project: `floor-cleaning-log-iqc-5s`
+- Site ID: `b3c674f5-3758-48c2-9e5b-450708f05192`
+- Production URL: https://floor-cleaning-log-iqc-5s.netlify.app
+- Use this repository and site only. Do not recreate them.
+- Local verification does not establish production readiness. Complete the hosted validation checklist below.
 
 ## Setup and production deployment
 
-Use Node 22 or newer and install with `npm install` in an environment with npm registry access. Commit the generated lockfile once dependency installation succeeds. Do not copy the scratch `node_modules` directory.
+Use Node 24 (specified in `.nvmrc`) and install with `npm ci`. The repository includes the dependency lockfile. Do not commit `node_modules`, `.netlify` or environment files.
 
-Create a strong admin password (at least 16 characters) and generate a random salt. `CLEANING_ADMIN_PASSWORD_HASH` has the format `salt:scryptHashHex`, where `scryptSync(password, salt, 64)` supplies the 128-character hex hash. Configure `CLEANING_SESSION_SECRET` as at least 32 random characters. Store both only in this project's Netlify environment variables with Functions scope; never in source, build output, frontend, or a committed `.env`. Use a private credential handoff for the admin password.
+Run `npm run setup:admin` in your own interactive terminal to choose and confirm a strong password privately. It creates an ignored `.env.admin` containing only the password hash and session secret. Import those variables into the existing Netlify project, with Functions scope and Production context, then redeploy. Keep the password in your password manager. The command refuses to overwrite an existing file. Alternatively, create a strong admin password (at least 16 characters) and generate a random salt. `CLEANING_ADMIN_PASSWORD_HASH` has the format `salt:scryptHashHex`, where `scryptSync(password, salt, 64)` supplies the 128-character hex hash. Configure `CLEANING_SESSION_SECRET` as at least 32 random characters. Store both only in this project's Netlify environment variables with Functions scope; never in source, build output, frontend, or a committed `.env`. Use a private credential handoff for the admin password.
 
 Set build Node version to 22+ and Functions runtime to a supported Node 22+ version in Netlify settings. `netlify.toml` publishes `public/`, bundles `netlify/functions/*.mts`, and preserves Sharp as an external native dependency.
 
@@ -59,11 +58,11 @@ The eight requested areas are the initial defaults. Admin can add/remove active 
 
 ## Verification completed locally
 
-15 tests passed: 8 date/metric/authentication tests, 3 actual Sharp image tests, and 4 API integration tests. API integration tests substitute an in-memory Blobs adapter; they **do not verify hosted Netlify Blobs**. Sharp image tests used the available runtime Sharp 0.35.4, also pinned in package.json.
+24 tests passed: 8 date/metric/authentication tests, 5 calendar rendering regressions, 1 complete public DOM navigation test, 3 actual Sharp image tests, and 7 API integration tests. API integration tests substitute an in-memory Blobs adapter; they **do not verify hosted Netlify Blobs**. Sharp image tests used the available runtime Sharp 0.35.4, also pinned in package.json.
 
 The integration flow covers unauthorized writes, CSRF and origin rejection, unpublished drafts, image upload and EXIF rotation, Before/After publication, month/statistics reads, image full/thumb decoding, edit conflict rejection, delete cleanup, and preview/production isolation. The test adapters live only under `tests/` and are never loaded by the deployed application. No demo records or images are seeded into the app.
 
-Full dependency installation, Netlify function bundling, browser/mobile UI validation, hosted storage, Production E2E and redeploy persistence remain unverified.
+Dependency installation and both Functions bundles were verified locally. Browser/mobile UI validation, hosted storage, Production E2E and redeploy persistence still require a real published deploy.
 
 ## Required production validation before closing this task
 
@@ -77,3 +76,9 @@ Full dependency installation, Netlify function bundling, browser/mobile UI valid
 8. Redeploy the same site and verify the previously saved records and photos survive.
 9. Delete the exact test activity IDs, confirm their record and image keys are removed, confirm the public calendar and metrics return to the baseline, and verify no drafts remain from the test.
 10. Record actual deployment ID, URL, verification outcomes and cleanup evidence. Do not declare Production completion based only on local tests or project creation.
+
+## Safe editing and deletion
+
+New photos uploaded while editing published evidence are staged privately under an edit batch. Public Calendar, Gallery, details and statistics continue to use committed photos until Save succeeds. Cancel discards only that edit batch. The tab retains its edit batch in session storage so reopening the editor after a refresh can resume or cancel staged uploads. Abandoned photos are never publicly served.
+
+Record deletion first saves a non-public tombstone, removes all images under that record's unique prefix, and removes the JSON last. If a storage operation fails, Admin can retry Delete from the calendar. Cleanup never lists or deletes another record's prefix. Removed-image cleanup keys remain attached to the record so interrupted cleanup can be retried.

@@ -8,7 +8,7 @@ const photo={id:'photo-1',width:1440,height:1920};
 const record={id:'00000000-0000-0000-0000-000000000001',date:'2026-10-07',area:'IQC Lab Floor',activityType:'Floor Cleaning',startTime:'09:30',endTime:'10:20',note:'Test-only evidence',published:true,beforeImages:[photo],afterImages:[{...photo,id:'photo-2'}],additionalImages:[]};
 const summary={cleaningDays:1,totalActivities:1,cleaningRate:3.2,daysInMonth:31,areasCleaned:1,photosUploaded:2};
 async function until(check){for(let i=0;i<30;i++){if(check())return;await new Promise(r=>setTimeout(r,5));}assert.ok(check(),'UI did not reach expected state');}
-test('Public frontend boots and navigates Calendar, Detail, Gallery, Viewer, Statistics, Area and About',async()=>{
+test('Dashboard is the only navigation page; Calendar, Detail and Image Viewer work',async()=>{
  const dom=new JSDOM(html,{url:'https://cleaning.example/',runScripts:'outside-only'}),w=dom.window,d=w.document,requests=[];
  w.HTMLDialogElement.prototype.showModal=function(){this.open=true;};
  w.HTMLDialogElement.prototype.close=function(){this.open=false;this.dispatchEvent(new w.Event('close'));};
@@ -28,17 +28,13 @@ test('Public frontend boots and navigates Calendar, Detail, Gallery, Viewer, Sta
  d.querySelector('[data-date="2026-10-07"]').click();await until(()=>d.querySelector('.detail-record'));
  assert.equal(d.querySelector('#detail').open,true);assert.equal(d.querySelectorAll('.detail-photos img').length,2);
  assert.equal(d.querySelector('[data-edit]'),null);
- d.querySelector('[data-close="detail"]').click();
- d.querySelector('[data-page="gallery"]').click();await until(()=>d.querySelector('#gallery-grid'));
- assert.equal(d.querySelectorAll('.photo-card').length,2);assert.ok([...d.querySelectorAll('.photo-card img')].every(img=>img.src.includes('size=thumb')));
- d.querySelector('#type-filter').value='after';d.querySelector('#type-filter').dispatchEvent(new w.Event('change'));assert.equal(d.querySelectorAll('.photo-card').length,1);
- d.querySelector('.photo-card').click();assert.equal(d.querySelector('#viewer').open,true);assert.ok(d.querySelector('#full-image').src.includes('size=full'));
+ assert.deepEqual([...d.querySelectorAll('nav [data-page]')].map(b=>b.textContent),['Dashboard']);
+ d.querySelector('[data-image]').click();assert.equal(d.querySelector('#viewer').open,true);assert.ok(d.querySelector('#full-image').src.includes('size=full'));
  d.querySelector('#zoom-in').click();assert.ok(d.querySelector('#full-image').classList.contains('zoomed'));
  d.querySelector('#photo-next').click();d.querySelector('#photo-prev').click();d.querySelector('[data-close="viewer"]').click();assert.equal(d.querySelector('#full-image').getAttribute('src'),null);
- for(const [page,selector] of [['statistics','table'],['area','.area-card'],['about','.about']]){d.querySelector(`[data-page="${page}"]`).click();await until(()=>d.querySelector('#content '+selector));}
- d.querySelector('[data-page="calendar"]').click();await until(()=>d.querySelector('.calendar'));
+ d.querySelector('[data-close="detail"]').click();
  d.querySelector('#next').click();await until(()=>d.querySelector('#month').value==='2026-11'&&d.querySelector('[data-date="2026-11-30"]'));
  d.querySelector('#previous').click();await until(()=>d.querySelector('[data-date="2026-10-31"]'));
  d.querySelector('#today').click();await until(()=>d.querySelector('.calendar'));
- assert.ok(requests.includes('/api/statistics?month=2026-10'));assert.equal(d.querySelector('#message').hidden,true);dom.window.close();
+ assert.equal(requests.some(path=>path.startsWith('/api/statistics?')),false);assert.equal(d.querySelector('#message').hidden,true);dom.window.close();
 });

@@ -9,6 +9,18 @@ function json(data: unknown, status = 200, cache = false, extra = {}) {
   return Response.json(data, { status, headers: { 'Cache-Control': cache ? 'public, max-age=0, must-revalidate' : 'no-store', 'Netlify-CDN-Cache-Control': cache ? 'public, s-maxage=15' : 'no-store', 'Vary': 'Cookie', 'Netlify-Vary': 'cookie=__Host-cleaning', ...extra } });
 }
 function fail(message: string, status = 400): never { throw Object.assign(new Error(message), { status }); }
+function viewRecord(record: RecordData, batch = '') {
+  const { pendingImages = [], cleanupKeys, deleting, ...result } = record;
+  for (const group of GROUPS) result[`${group}Images`] = [...record[`${group}Images`], ...pendingImages.filter(p => batch && p.batch === batch && p.group === group).map(({batch, group, ...photo}) => photo)];
+  return result;
+}
+function editBatch(value: unknown) {
+  if (typeof value !== 'string' || !/^[a-f0-9-]{36}$/.test(value)) fail('Invalid edit session.');
+  return value as string;
+}
+async function cleanKeys(store: any, keys: string[] = []) {
+  for (const key of keys) await store.delete(key);
+}
 function parseRecordQuery(url: URL) {
   const date = url.searchParams.get('date') || '', id = url.searchParams.get('id') || '';
   if (!validDate(date) || !/^[a-f0-9-]{36}$/.test(id)) fail('Invalid record reference.');
@@ -64,7 +76,7 @@ export default async (req: Request, context: Context) => {
         const month = url.searchParams.get('month') || '';
         if (!validMonth(month)) fail('Choose a valid month.');
         const rows = await monthRecords(store, month);
-        const records = session ? rows : rows.filter(r => r.published);
+        const records = rows.filter(r => session || (!r.deleting && r.published)).map(r => viewRecord(r));
         return json({ records, summary: summary(rows, month) }, 200, !session);
       }
       if (req.method === 'POST') {
@@ -75,16 +87,32 @@ export default async (req: Request, context: Context) => {
         await store.setJSON(recordKey(record.date, record.id), record); return json({ record }, 201);
       }
     }
-    if (action === 'record' || action === 'upload') {
+    if (action === 'record' || action === 'upload' || action === 'discard-uploads') {
       const { key, date, id } = parseRecordQuery(url);
       const entry = await store.getWithMetadata(key, { type: 'json' });
       const record: RecordData | null = entry?.data || null;
-      if (!record || (!session && !record.published)) fail('Record not found.', 404);
-      if (action === 'record' && req.method === 'GET') return json({ record }, 200, !session);
+      if (!record || (!session && (!record.published || record.deleting))) fail('Record not found.', 404);
+      if (action === 'record' && req.method === 'GET') return json({ record: viewRecord(record, session && url.searchParams.has('editBatch') ? editBatch(url.searchParams.get('editBatch')) : '') }, 200, !session);
       if (action === 'record' && req.method === 'DELETE') {
+        // Keep a tombstone until every photo is deleted; a failed delete is retryable.
+        const saved = await store.setJSON(key, {...record, deleting: true, published: false}, {onlyIfMatch: entry.etag});
+        if (!saved.modified) fail('This record changed. Reload before deleting.', 409);
+        const prefix = `images/${date.replaceAll('-', '/')}/${id}/`;
+        const listed = await store.list({prefix});
+        await cleanKeys(store, [...new Set([...listed.blobs.map((b: any) => b.key), ...images(record).flatMap(p => [p.fullKey,p.thumbKey]), ...(record.pendingImages || []).flatMap(p => [p.fullKey,p.thumbKey]), ...(record.cleanupKeys || [])])]);
         await store.delete(key);
-        for (const photo of images(record)) { await store.delete(photo.fullKey); await store.delete(photo.thumbKey); }
         return json({ ok: true });
+      }
+      if (record.deleting) fail('Deletion is incomplete. Retry Delete to finish cleanup.', 409);
+      if (action === 'discard-uploads' && req.method === 'POST') {
+        const batch = editBatch((await req.json()).editBatch);
+        const discarded = (record.pendingImages || []).filter(p => p.batch === batch);
+        const cleanupKeys = [...(record.cleanupKeys || []), ...discarded.flatMap(p => [p.fullKey,p.thumbKey])];
+        const next = {...record, pendingImages: (record.pendingImages || []).filter(p => p.batch !== batch), cleanupKeys};
+        const saved = await store.setJSON(key, next, {onlyIfMatch: entry.etag});
+        if (!saved.modified) fail('This record changed. Retry cancel.', 409);
+        await cleanKeys(store, cleanupKeys);
+        return json({ok:true});
       }
       if (action === 'record' && req.method === 'PUT') {
         const body = await req.json();
@@ -94,7 +122,12 @@ export default async (req: Request, context: Context) => {
         if (fields.date !== record.date) fail('Record date cannot change after creation. Create a new record for another date.');
         const removed = new Set(Array.isArray(body.removeImageIds) ? body.removeImageIds : []);
         const next = { ...record, ...fields, updatedAt: new Date().toISOString() };
-        for (const group of GROUPS) next[`${group}Images`] = record[`${group}Images`].filter(p => !removed.has(p.id));
+        const batch = body.editBatch ? editBatch(body.editBatch) : '';
+        const pending = (record.pendingImages || []).filter(p => batch && p.batch === batch);
+        for (const group of GROUPS) next[`${group}Images`] = [...record[`${group}Images`], ...pending.filter(p => p.group === group).map(({group,batch,...photo}) => photo)].filter(p => !removed.has(p.id));
+        next.pendingImages = (record.pendingImages || []).filter(p => p.batch !== batch);
+        if (images(next).length > 30) fail('Maximum 30 photos per activity.');
+        next.cleanupKeys = [...(record.cleanupKeys || []), ...[...images(record), ...pending].filter(p => removed.has(p.id)).flatMap(p => [p.fullKey,p.thumbKey])];
         if (body.publish === true) {
           if (!next.beforeImages.length || !next.afterImages.length) fail('Before and After photo evidence is required to publish.');
           next.published = true;
@@ -102,13 +135,16 @@ export default async (req: Request, context: Context) => {
         if (next.published && (!next.beforeImages.length || !next.afterImages.length)) fail('Published records must keep Before and After photo evidence.');
         const saved = await store.setJSON(key, next, { onlyIfMatch: entry.etag });
         if (!saved.modified) fail('This record changed. Reload before editing.', 409);
-        for (const photo of images(record).filter(p => removed.has(p.id))) { await store.delete(photo.fullKey); await store.delete(photo.thumbKey); }
-        return json({ record: next });
+        // Publication already succeeded. Keep cleanup keys for a later retry if storage fails.
+        try { await cleanKeys(store, next.cleanupKeys); } catch { console.error('Photo cleanup deferred', context.requestId); }
+        return json({ record: viewRecord(next) });
       }
       if (action === 'upload' && req.method === 'POST') {
         const group = url.searchParams.get('group') as ImageGroup;
         if (!GROUPS.includes(group)) fail('Choose Before, After or Additional.');
-        if (images(record).length >= 30) fail('Maximum 30 photos per activity.');
+        const batch = record.published ? editBatch(url.searchParams.get('editBatch')) : '';
+        if (images(viewRecord(record, batch)).length >= 30) fail('Maximum 30 photos per activity.');
+        if ((record.pendingImages || []).length >= 60) fail('Too many unfinished uploads. Finish or cancel the previous edit.');
         if (Number(req.headers.get('content-length') || 0) > 4500000) fail('Photo is too large. Please retry using automatic compression.', 413);
         const data = Buffer.from(await req.arrayBuffer());
         if (!data.length || data.length > 4500000) fail('Photo must be under 4.5 MB.', 413);
@@ -120,22 +156,24 @@ export default async (req: Request, context: Context) => {
           await store.set(fullKey, new Blob([new Uint8Array(optimized.full)]));
           await store.set(thumbKey, new Blob([new Uint8Array(optimized.thumb)]));
           const photo = { id: photoId, fullKey, thumbKey, width: optimized.width, height: optimized.height, bytes: optimized.full.length, thumbBytes: optimized.thumb.length };
-          record[`${group}Images`].push(photo); record.updatedAt = new Date().toISOString();
+          if (record.published) record.pendingImages = [...(record.pendingImages || []), {...photo, group, batch}];
+          else record[`${group}Images`].push(photo);
+          record.updatedAt = new Date().toISOString();
           const saved = await store.setJSON(key, record, { onlyIfMatch: entry.etag });
           if (!saved.modified) fail('This record changed during upload. Reload and retry.', 409);
-          return json({ photo, record }, 201);
+          return json({ photo, record: viewRecord(record, batch) }, 201);
         } catch (e) { await store.delete(fullKey); await store.delete(thumbKey); throw e; }
       }
     }
     if (action === 'image' && req.method === 'GET') {
       const { key } = parseRecordQuery(url);
       const record: RecordData | null = await store.get(key, { type: 'json' });
-      if (!record || (!session && !record.published)) fail('Photo not found.', 404);
-      const photo = images(record).find(p => p.id === url.searchParams.get('photo'));
+      if (!record || record.deleting || (!session && !record.published)) fail('Photo not found.', 404);
+      const photo = [...images(record), ...(session ? record.pendingImages || [] : [])].find(p => p.id === url.searchParams.get('photo'));
       if (!photo) fail('Photo not found.', 404);
       const image = await store.get(url.searchParams.get('size') === 'thumb' ? photo.thumbKey : photo.fullKey, { type: 'arrayBuffer' });
       if (!image) fail('Photo not found.', 404);
-      return new Response(image, { headers: { 'Content-Type': 'image/webp', 'Cache-Control': session ? 'no-store' : 'public, max-age=60', 'X-Content-Type-Options': 'nosniff' } });
+      return new Response(image, { headers: { 'Content-Type': 'image/webp', 'Cache-Control': session ? 'no-store' : 'public, max-age=60', 'Vary': 'Cookie', 'Netlify-Vary': 'cookie=__Host-cleaning', 'X-Content-Type-Options': 'nosniff' } });
     }
     if (action === 'statistics' && req.method === 'GET') {
       const end = url.searchParams.get('month') || '';

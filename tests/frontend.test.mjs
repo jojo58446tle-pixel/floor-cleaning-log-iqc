@@ -69,3 +69,18 @@ test('Admin can select one mobile camera photo and publish; empty activity is re
  const upload=requests.find(r=>r.path.startsWith('/api/upload?'));assert.ok(upload.path.includes('group=after'));assert.equal(upload.body.type,'image/webp');
  assert.ok(requests.some(r=>r.method==='PUT'&&JSON.parse(r.body).publish===true));dom.window.close();
 });
+
+test('Public landing never opens login automatically, even at the legacy /admin URL',async()=>{
+ for(const path of ['/','/admin']){
+  const dom=new JSDOM(html,{url:'https://cleaning.example'+path,runScripts:'outside-only'}),w=dom.window,d=w.document;
+  w.HTMLDialogElement.prototype.showModal=function(){this.open=true;};
+  w.HTMLDialogElement.prototype.close=function(){this.open=false;};
+  w.fetch=async url=>({ok:true,status:200,json:async()=>url==='/api/auth/session'?{authenticated:false,csrf:null}:url==='/api/settings'?{areas:['IQC Lab Floor'],holidays:[]}:{records:[],summary}});
+  await w.eval('(async()=>{'+script+'})()');
+  assert.equal(d.querySelector('#login').open,false);assert.ok(d.querySelector('.calendar'));assert.equal(d.querySelector('#add').hidden,true);
+  d.querySelector('#admin-sign-in').click();assert.equal(d.querySelector('#login').open,true);
+  d.querySelector('[data-close="login"]').click();assert.equal(d.querySelector('#login').open,false);
+  d.querySelector('#next').click();await until(()=>d.querySelector('.calendar'));
+  assert.equal(d.querySelector('#login').open,false);dom.window.close();
+ }
+});

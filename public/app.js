@@ -19,8 +19,9 @@ async function api(path,options={}) {
 function notice(message){$('#message').hidden=!message;$('#message').textContent=message||'';}
 function options(values,first){return (first?`<option value="">${esc(first)}</option>`:'')+values.map(v=>`<option>${esc(v)}</option>`).join('');}
 function authUI(){
- $('#auth-actions').innerHTML=state.admin?'<button id="logout">Sign out</button>':'<a href="/admin" class="admin-link">Admin sign in ↗</a>';
+ $('#auth-actions').innerHTML=state.admin?'<button id="logout">Sign out</button>':'<button type="button" id="admin-sign-in" class="admin-link">Admin sign in</button>';
  $('#add').hidden=!state.admin;$('#view-mode').textContent=state.admin?'Admin · Edit access':'Public · Read only';
+ $('#admin-sign-in')?.addEventListener('click',()=>$('#login').showModal());
  $('#logout')?.addEventListener('click',async()=>{try{await api('auth/logout',{method:'POST'});state.admin=false;state.csrf=null;authUI();await load();history.replaceState({},'', '/');}catch(e){notice(e.message);}});
 }
 function summary(){
@@ -131,4 +132,4 @@ $('#login-form').onsubmit=async e=>{e.preventDefault();const button=e.target.que
 document.querySelectorAll('[data-page]').forEach(b=>b.onclick=()=>{state.page=b.dataset.page;load();});
 function moveMonth(step){const [y,m]=state.month.split('-').map(Number);const d=new Date(Date.UTC(y,m-1+step,1));const next=d.toISOString().slice(0,7);if(next<'2000-01'||next>'2199-12')return;state.month=next;load();}
 $('#previous').onclick=()=>moveMonth(-1);$('#next').onclick=()=>moveMonth(1);$('#today').onclick=()=>{state.month=today().slice(0,7);load();};$('#month').onchange=e=>{if(/^\d{4}-(0[1-9]|1[0-2])$/.test(e.target.value)&&e.target.value>='2000-01'&&e.target.value<='2199-12'){state.month=e.target.value;load();}};
-try{const session=await api('auth/session');state.admin=session.authenticated;state.csrf=session.csrf;}catch(e){notice(e.message);}authUI();await load();if(location.pathname==='/admin'&&!state.admin)$('#login').showModal();
+try{const session=await api('auth/session');state.admin=session.authenticated;state.csrf=session.csrf;}catch(e){notice(e.message);}authUI();await load();

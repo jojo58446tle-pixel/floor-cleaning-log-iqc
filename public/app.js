@@ -72,7 +72,7 @@ async function openDetail(date){
  try{const rows=state.records.filter(r=>r.date===date);if(!rows.length){$('#detail-content').innerHTML=`<div class="empty-state"><strong>No recorded activity</strong>There is no cleaning evidence for this date.</div>${state.admin?'<button id="add-on-date" class="primary">+ Add activity</button>':''}`;$('#add-on-date')?.addEventListener('click',()=>{dialog.close();openEditor(null,date);});return;}
  const records=await Promise.all(rows.map(r=>api('record?'+new URLSearchParams({date,id:r.id})).then(x=>x.record)));
  const all=photos(records);if(state.admin){all.splice(0,all.length,...records.flatMap(r=>groups.flatMap(group=>r[group+'Images'].map(p=>({r,p,group})))));}
- $('#detail-content').innerHTML=records.map(r=>`<article class="detail-record"><h3>${esc(r.activityType)}</h3><span class="badge ${r.published?'':'draft'}">${r.published?'✓ Cleaned':'Draft · Not public'}</span><div class="details-grid"><div><small>AREA</small>${esc(r.area)}</div><div><small>START / FINISH</small>${r.startTime} – ${r.endTime}</div><div><small>DATE</small>${fmt(r.date)}</div></div><p class="note">${esc(r.note||'No additional notes.')}</p><div class="evidence">${groups.map(g=>`<section class="${g}"><h4>${g}</h4><div class="detail-photos">${r[g+'Images'].map(p=>`<button data-image="${all.findIndex(x=>x.p.id===p.id)}"><img src="${imageUrl(r,p,'full')}" alt="${esc(g+' — '+r.area)}" loading="lazy" decoding="async"></button>`).join('')||'<span class="muted">No photos</span>'}</div></section>`).join('')}</div>${state.admin?`<div class="detail-actions"><button data-edit="${r.id}">Edit activity</button><button class="danger" data-delete="${r.id}">Delete activity</button></div>`:''}</article>`).join('');
+ $('#detail-content').innerHTML=records.map(r=>`<article class="detail-record"><h3>${esc(r.activityType)}</h3><span class="badge ${r.published?'':'draft'}">${r.published?'✓ Cleaned':'Draft · Not public'}</span><div class="details-grid"><div><small>AREA</small>${esc(r.area)}</div><div><small>DATE</small>${fmt(r.date)}</div></div><p class="note">${esc(r.note||'No additional notes.')}</p><div class="evidence"><section><h4>Cleaning photos / ภาพทำความสะอาด</h4><div class="detail-photos">${groups.flatMap(g=>r[g+'Images']).map(p=>`<button data-image="${all.findIndex(x=>x.p.id===p.id)}"><img src="${imageUrl(r,p,'full')}" alt="${esc('Cleaning photo — '+r.area)}" loading="lazy" decoding="async"></button>`).join('')||'<span class="muted">No photos</span>'}</div></section></div>${state.admin?`<div class="detail-actions"><button data-edit="${r.id}" class="primary">Edit activity / แก้ไขรูป</button><button class="danger" data-delete="${r.id}">Delete activity</button></div>`:''}</article>`).join('');
  $('#detail-content').querySelectorAll('[data-image]').forEach(b=>b.onclick=()=>openViewer(all,Number(b.dataset.image)));
  $('#detail-content').querySelectorAll('[data-edit]').forEach(b=>b.onclick=()=>{dialog.close();openEditor(records.find(r=>r.id===b.dataset.edit));});
  $('#detail-content').querySelectorAll('[data-delete]').forEach(b=>b.onclick=async()=>{if(!confirm('Delete this activity and all its photo evidence permanently?'))return;const r=records.find(r=>r.id===b.dataset.delete);b.disabled=true;try{await api('record?'+new URLSearchParams({date:r.date,id:r.id}),{method:'DELETE'});dialog.close();await load();}catch(e){b.disabled=false;notice(e.message);}});
@@ -91,14 +91,21 @@ async function openEditor(record=null,date=today()){
  const f=$('#record-form');f.reset();$('#editor-title').textContent=record?'Edit cleaning activity':'Add cleaning activity';
  f.elements.area.innerHTML=options([...new Set([...state.settings.areas,...(record?[record.area]:[])])]);
  f.elements.date.value=record?.date||date;f.elements.date.disabled=!!record;f.elements.area.value=record?.area||state.settings.areas[0];
- for(const name of ['activityType','startTime','endTime','note'])f.elements[name].value=record?.[name]||(name==='activityType'?'Floor Cleaning':name==='startTime'?'09:30':name==='endTime'?'10:20':'');
- $('#editor-status').textContent='';$('#save-record').disabled=false;groups.forEach(drawPreview);$('#editor').showModal();
+ for(const name of ['activityType','note'])f.elements[name].value=record?.[name]||(name==='activityType'?'Floor Cleaning':'');
+ $('#editor-status').textContent='';$('#save-record').disabled=false;drawPreview();$('#editor').showModal();
 }
-function drawPreview(group){const saved=(editing||draft)?.[group+'Images']||[];const box=$('#'+group+'-preview');box.innerHTML='';
- for(const p of saved.filter(p=>!removed.has(p.id))){const r=editing||draft,wrap=document.createElement('span');wrap.className='preview-item';wrap.innerHTML=`<img src="${imageUrl(r,p)}" alt="${group} photo"><button type="button" aria-label="Remove photo">✕</button>`;wrap.querySelector('button').onclick=()=>{if(busy)return;removed.add(p.id);drawPreview(group);};box.append(wrap);}
- queued[group].forEach((file,i)=>{const wrap=document.createElement('span');wrap.className='preview-item';const objectUrl=URL.createObjectURL(file);previewUrls.push(objectUrl);wrap.innerHTML=`<img alt="Selected ${group} photo"><button type="button" aria-label="Remove selected photo">✕</button>`;wrap.querySelector('img').src=objectUrl;wrap.querySelector('button').onclick=()=>{if(busy)return;queued[group].splice(i,1);drawPreview(group);};box.append(wrap);});
+function drawPreview(){
+ resetPreviews();const box=$('#after-preview');box.innerHTML='';const record=editing||draft;
+ for(const group of groups){
+   for(const p of (record?.[group+'Images']||[]).filter(p=>!removed.has(p.id))){
+     const wrap=document.createElement('span');wrap.className='preview-item';
+     wrap.innerHTML=`<img src="${imageUrl(record,p)}" alt="Cleaning photo"><button type="button" aria-label="Remove photo">✕</button>`;
+     wrap.querySelector('button').onclick=()=>{if(busy)return;removed.add(p.id);drawPreview();};box.append(wrap);
+   }
+   queued[group].forEach((file,i)=>{const wrap=document.createElement('span');wrap.className='preview-item';const objectUrl=URL.createObjectURL(file);previewUrls.push(objectUrl);wrap.innerHTML='<img alt="Selected cleaning photo"><button type="button" aria-label="Remove selected photo">✕</button>';wrap.querySelector('img').src=objectUrl;wrap.querySelector('button').onclick=()=>{if(busy)return;queued[group].splice(i,1);drawPreview();};box.append(wrap);});
+ }
 }
-document.querySelectorAll('[data-photo-group]').forEach(input=>input.onchange=e=>{if(busy)return;const g=input.dataset.photoGroup;queued[g].push(...e.target.files);e.target.value='';drawPreview(g);});
+document.querySelectorAll('[data-photo-group]').forEach(input=>input.onchange=e=>{if(busy)return;const g=input.dataset.photoGroup;queued[g].push(...e.target.files);e.target.value='';drawPreview();});
 async function mobileImage(file,onProgress=()=>{}){
  let source,objectUrl,canvas;
  try{
@@ -142,7 +149,7 @@ $('#record-form').onsubmit=async e=>{
  e.preventDefault();if(busy)return;const form=e.target,base=editing||draft;const has=g=>(base?.[g+'Images']||[]).filter(p=>!removed.has(p.id)).length+queued[g].length;
  if(!groups.some(g=>has(g))){$('#editor-status').textContent='Add at least one cleaning photo to publish this activity.';return;}
  if(groups.reduce((n,g)=>n+has(g),0)>30){$('#editor-status').textContent='Maximum 30 photos per activity.';return;}
- const fields=Object.fromEntries(new FormData(form));fields.date=form.elements.date.value;
+ const fields=Object.fromEntries(new FormData(form));fields.date=form.elements.date.value;fields.startTime=base?.startTime||'';fields.endTime=base?.endTime||'';
  busy=true;$('#save-record').disabled=true;$('#cancel-editor').disabled=true;$('#discard').disabled=true;for(const input of form.querySelectorAll('input,select,textarea'))input.disabled=true;
  try{
    // Compress before creating a draft, so unsupported phone photos leave no empty record.
@@ -150,9 +157,9 @@ $('#record-form').onsubmit=async e=>{
    if(!base){$('#editor-status').textContent='Creating activity…';draft=(await api('records',{method:'POST',body:JSON.stringify(fields)})).record;}
    let current=editing||draft;
    for(const g of groups){while(prepared[g].length){$('#editor-status').textContent=`Uploading ${g} photo…`;const result=await api('upload?'+new URLSearchParams({date:current.date,id:current.id,group:g,editBatch:editSession}),{method:'POST',body:prepared[g][0],headers:{'Content-Type':prepared[g][0].type}});current=result.record;if(editing)editing=current;else draft=current;prepared[g].shift();queued[g].shift();}}
-   $('#editor-status').textContent='Saving photo evidence…';await api('record?'+new URLSearchParams({date:current.date,id:current.id}),{method:'PUT',body:JSON.stringify({...fields,updatedAt:current.updatedAt,publish:true,editBatch:editSession,removeImageIds:[...removed]})});
-   sessionStorage.removeItem('cleaning-edit:'+current.id);draft=null;editing=null;busy=false;$('#editor').close();resetPreviews();state.month=fields.date.slice(0,7);await load();
- }catch(err){$('#editor-status').textContent=err.message+' Uploaded photos are retained so you can retry.';groups.forEach(drawPreview);}
+   $('#editor-status').textContent='Saving photo evidence…';const saved=await api('record?'+new URLSearchParams({date:current.date,id:current.id}),{method:'PUT',body:JSON.stringify({...fields,updatedAt:current.updatedAt,publish:true,editBatch:editSession,removeImageIds:[...removed]})});
+   sessionStorage.removeItem('cleaning-edit:'+current.id);draft=null;editing=null;busy=false;$('#editor').close();resetPreviews();state.month=fields.date.slice(0,7);await load();notice('Saved successfully. บันทึกแล้ว สามารถแก้ไขรูปได้ ');const editButton=document.createElement('button');editButton.id='edit-saved';editButton.className='primary';editButton.textContent='Edit activity / แก้ไขรูป';editButton.onclick=()=>openEditor(saved.record);$('#message').append(editButton);
+ }catch(err){$('#editor-status').textContent=err.message+' Uploaded photos are retained so you can retry.';drawPreview();}
  finally{busy=false;$('#save-record').disabled=false;$('#cancel-editor').disabled=false;$('#discard').disabled=false;for(const input of form.querySelectorAll('input,select,textarea'))input.disabled=false;form.elements.date.disabled=!!(editing||draft);}
 };
 async function cancelEditor(){if(busy)return;if(editing?.published){try{await api('discard-uploads?'+new URLSearchParams({date:editing.date,id:editing.id}),{method:'POST',body:JSON.stringify({editBatch:editSession})});}catch(e){$('#editor-status').textContent='Uploads could not be discarded: '+e.message;return;}}if(draft){try{await api('record?'+new URLSearchParams({date:draft.date,id:draft.id}),{method:'DELETE'});draft=null;}catch(e){$('#editor-status').textContent='Draft could not be removed: '+e.message;return;}}if(editing)sessionStorage.removeItem('cleaning-edit:'+editing.id);$('#editor').close();resetPreviews();await load();}

@@ -26,7 +26,7 @@ test('Dashboard is the only navigation page; Calendar, Detail and Image Viewer w
  assert.equal(d.querySelectorAll('[data-date]').length,31);assert.equal(d.querySelector('#add').hidden,true);
  assert.ok([...d.querySelectorAll('.calendar img')].every(img=>img.src.includes('size=thumb')));
  d.querySelector('[data-date="2026-10-07"]').click();await until(()=>d.querySelector('.detail-record'));
- assert.equal(d.querySelector('#detail').open,true);assert.equal(d.querySelectorAll('.detail-photos img').length,2);
+ assert.equal(d.querySelector('#detail').open,true);assert.equal(d.querySelectorAll('.detail-photos img').length,2);assert.equal(d.querySelectorAll('.evidence section').length,1);assert.ok(!d.querySelector('#detail-content').textContent.includes('START / FINISH'));
  assert.equal(d.querySelector('[data-edit]'),null);
  assert.deepEqual([...d.querySelectorAll('nav [data-page]')].map(b=>b.textContent),['Dashboard']);
  d.querySelector('[data-image]').click();assert.equal(d.querySelector('#viewer').open,true);assert.ok(d.querySelector('#full-image').src.includes('size=full'));
@@ -67,7 +67,15 @@ test('Admin upload retries without reselection, guards duplicate submit and publ
  Object.defineProperty(camera,'files',{value:[new w.File(['phone-photo'],'phone.jpg',{type:'image/jpeg'}),new w.File(['second'],'second.jpg',{type:'image/jpeg'})]});camera.dispatchEvent(new w.Event('change'));
  form.dispatchEvent(new w.Event('submit',{cancelable:true}));form.dispatchEvent(new w.Event('submit',{cancelable:true}));await until(()=>d.querySelector('#editor-status').textContent.includes('Temporary upload failure'));assert.equal(requests.filter(r=>r.path==='/api/records').length,1);form.dispatchEvent(new w.Event('submit',{cancelable:true}));await until(()=>!d.querySelector('#editor').open);
  const upload=requests.find(r=>r.path.startsWith('/api/upload?'));assert.ok(upload.path.includes('group=after'));assert.equal(upload.body.type,'image/jpeg');assert.equal(upload.headers['Content-Type'],'image/jpeg');assert.equal(requests.filter(r=>r.path.startsWith('/api/upload?')).length,3);
- assert.ok(requests.some(r=>r.method==='PUT'&&JSON.parse(r.body).publish===true));dom.window.close();
+ assert.ok(requests.some(r=>r.method==='PUT'&&JSON.parse(r.body).publish===true));
+ assert.equal(d.querySelectorAll('#editor .upload-box').length,1);assert.equal(form.elements.startTime,undefined);assert.equal(form.elements.endTime,undefined);
+ assert.equal(JSON.parse(requests.find(r=>r.path==='/api/records').body).startTime,'');
+ d.querySelector('#edit-saved').click();await until(()=>d.querySelector('#editor').open);
+ assert.equal(d.querySelectorAll('#after-preview img').length,1);
+ d.querySelector('[aria-label="Remove photo"]').click();camera.dispatchEvent(new w.Event('change'));
+ form.dispatchEvent(new w.Event('submit',{cancelable:true}));await until(()=>!d.querySelector('#editor').open);
+ const update=requests.filter(r=>r.method==='PUT').at(-1);assert.deepEqual(JSON.parse(update.body).removeImageIds,[photo.id]);assert.equal(requests.filter(r=>r.path==='/api/records').length,1);
+ dom.window.close();
 });
 
 test('Public landing never opens login automatically, even at the legacy /admin URL',async()=>{

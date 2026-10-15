@@ -9,3 +9,8 @@ test('mobile EXIF orientation is applied before resize; full and thumbnail are W
 });
 test('small photos are not enlarged or padded to meet file-size targets',async()=>{const input=await sharp({create:{width:300,height:200,channels:3,background:'#ffffff'}}).png().toBuffer();const result=await optimizeImage(input);assert.equal(result.width,300);assert.equal(result.height,200);assert.ok(result.full.length<300*1024);});
 test('non-photo files are rejected',async()=>{await assert.rejects(()=>optimizeImage(Buffer.from('<script>bad</script>')));});
+
+for(const format of ['jpeg','png','webp'])test(`${format} uploads are stored as full and thumbnail WebP`,async()=>{
+ const input=await sharp({create:{width:640,height:480,channels:3,background:'#abc'}})[format]().toBuffer();
+ const result=await optimizeImage(input);assert.equal((await sharp(result.full).metadata()).format,'webp');assert.equal((await sharp(result.thumb).metadata()).format,'webp');assert.equal(result.width,640);assert.equal(result.height,480);
+});

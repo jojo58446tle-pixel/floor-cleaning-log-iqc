@@ -23,7 +23,7 @@ export function validateFields(body: any, areas: string[]) {
   if (!validDate(body.date || '')) throw new Error('Choose a valid date.');
   if (!areas.includes(body.area)) throw new Error('Choose an active area.');
   if (typeof body.activityType !== 'string' || !body.activityType.trim() || body.activityType.length > 100) throw new Error('Activity must contain 1–100 characters.');
-  if (![body.startTime, body.endTime].every(t => typeof t === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(t)) || body.endTime < body.startTime) throw new Error('Finish time must be on or after start time.');
+  if ((body.startTime || body.endTime) && (![body.startTime, body.endTime].every(t => typeof t === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(t)) || body.endTime < body.startTime)) throw new Error('Finish time must be on or after start time.');
   if (typeof body.note !== 'string' || body.note.length > 3000) throw new Error('Note must be under 3,000 characters.');
-  return { date: body.date, area: body.area, activityType: body.activityType.trim(), startTime: body.startTime, endTime: body.endTime, note: body.note.trim(), status: 'cleaned' as const };
+  return { date: body.date, area: body.area, activityType: body.activityType.trim(), startTime: body.startTime || '', endTime: body.endTime || '', note: body.note.trim(), status: 'cleaned' as const };
 }

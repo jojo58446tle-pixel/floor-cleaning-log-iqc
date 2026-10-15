@@ -95,17 +95,48 @@ async function openEditor(record=null,date=today()){
  $('#editor-status').textContent='';$('#save-record').disabled=false;groups.forEach(drawPreview);$('#editor').showModal();
 }
 function drawPreview(group){const saved=(editing||draft)?.[group+'Images']||[];const box=$('#'+group+'-preview');box.innerHTML='';
- for(const p of saved.filter(p=>!removed.has(p.id))){const r=editing||draft,wrap=document.createElement('span');wrap.className='preview-item';wrap.innerHTML=`<img src="${imageUrl(r,p)}" alt="${group} photo"><button type="button" aria-label="Remove photo">✕</button>`;wrap.querySelector('button').onclick=()=>{removed.add(p.id);drawPreview(group);};box.append(wrap);}
- queued[group].forEach((file,i)=>{const wrap=document.createElement('span');wrap.className='preview-item';const objectUrl=URL.createObjectURL(file);previewUrls.push(objectUrl);wrap.innerHTML=`<img alt="Selected ${group} photo"><button type="button" aria-label="Remove selected photo">✕</button>`;wrap.querySelector('img').src=objectUrl;wrap.querySelector('button').onclick=()=>{queued[group].splice(i,1);drawPreview(group);};box.append(wrap);});
+ for(const p of saved.filter(p=>!removed.has(p.id))){const r=editing||draft,wrap=document.createElement('span');wrap.className='preview-item';wrap.innerHTML=`<img src="${imageUrl(r,p)}" alt="${group} photo"><button type="button" aria-label="Remove photo">✕</button>`;wrap.querySelector('button').onclick=()=>{if(busy)return;removed.add(p.id);drawPreview(group);};box.append(wrap);}
+ queued[group].forEach((file,i)=>{const wrap=document.createElement('span');wrap.className='preview-item';const objectUrl=URL.createObjectURL(file);previewUrls.push(objectUrl);wrap.innerHTML=`<img alt="Selected ${group} photo"><button type="button" aria-label="Remove selected photo">✕</button>`;wrap.querySelector('img').src=objectUrl;wrap.querySelector('button').onclick=()=>{if(busy)return;queued[group].splice(i,1);drawPreview(group);};box.append(wrap);});
 }
-document.querySelectorAll('[data-photo-group]').forEach(input=>input.onchange=e=>{const g=input.dataset.photoGroup;queued[g].push(...e.target.files);e.target.value='';drawPreview(g);});
-async function mobileImage(file){
- if(file.size>40000000)throw new Error('Photo exceeds 40 MB. Export a smaller JPEG.');
- let bitmap;try{bitmap=await createImageBitmap(file,{imageOrientation:'from-image'});}catch{throw new Error('This phone photo cannot be opened. Export HEIC as JPEG and try again.');}
- const scale=Math.min(1,1920/Math.max(bitmap.width,bitmap.height)),canvas=document.createElement('canvas');canvas.width=Math.round(bitmap.width*scale);canvas.height=Math.round(bitmap.height*scale);canvas.getContext('2d').drawImage(bitmap,0,0,canvas.width,canvas.height);bitmap.close();
- let output=await new Promise(resolve=>canvas.toBlob(resolve,'image/webp',.8));if(!output)throw new Error('Photo conversion failed. Please retry.');
- if(output.size>4500000)output=await new Promise(resolve=>canvas.toBlob(resolve,'image/webp',.65));
- if(!output||output.size>4500000)throw new Error('Photo is too large after compression. Select a smaller photo.');return output;
+document.querySelectorAll('[data-photo-group]').forEach(input=>input.onchange=e=>{if(busy)return;const g=input.dataset.photoGroup;queued[g].push(...e.target.files);e.target.value='';drawPreview(g);});
+async function mobileImage(file,onProgress=()=>{}){
+ let source,objectUrl,canvas;
+ try{
+   onProgress('Preparing');
+   // Both decoding paths apply embedded orientation; never rotate a second time.
+   try{source=await createImageBitmap(file,{imageOrientation:'from-image'});}catch{
+     objectUrl=URL.createObjectURL(file);
+     source=await new Promise((resolve,reject)=>{const img=new Image();img.onload=()=>resolve(img);img.onerror=reject;img.src=objectUrl;});
+   }
+   const width=source.naturalWidth||source.width,height=source.naturalHeight||source.height;
+   if(!width||!height)throw new Error('decode');
+   canvas=document.createElement('canvas');
+   onProgress('Compressing');
+   // Leave room below the 4.5 MB request ceiling (including platform transport overhead).
+   const target=3000000;
+   for(const edge of [1920,1600,1280,1024]){
+     const scale=Math.min(1,edge/Math.max(width,height));
+     canvas.width=Math.max(1,Math.round(width*scale));canvas.height=Math.max(1,Math.round(height*scale));
+     const ctx=canvas.getContext('2d');if(!ctx)throw new Error('canvas');
+     ctx.fillStyle='#fff';ctx.fillRect(0,0,canvas.width,canvas.height);
+     ctx.drawImage(source,0,0,canvas.width,canvas.height);
+     for(const type of ['image/webp','image/jpeg']){
+       for(const quality of [.8,.65,.5,.35]){
+         let blob;try{blob=await new Promise(resolve=>canvas.toBlob(resolve,type,quality));}catch{break;}
+         // Safari may silently return PNG when the requested encoder is unavailable.
+         if(!blob||blob.type!==type)break;
+         if(blob.size>0&&blob.size<=target)return blob;
+       }
+     }
+   }
+   throw new Error('encode');
+ }catch(err){
+   throw new Error('Unable to prepare this photo. Please retry. If it is HEIC/HEIF and this browser cannot open it, use Safari or export it as JPEG.');
+ }finally{
+   source?.close?.();if(source instanceof HTMLImageElement)source.src='';
+   if(objectUrl)URL.revokeObjectURL(objectUrl);
+   if(canvas){canvas.width=1;canvas.height=1;}
+ }
 }
 $('#record-form').onsubmit=async e=>{
  e.preventDefault();if(busy)return;const form=e.target,base=editing||draft;const has=g=>(base?.[g+'Images']||[]).filter(p=>!removed.has(p.id)).length+queued[g].length;
@@ -115,10 +146,10 @@ $('#record-form').onsubmit=async e=>{
  busy=true;$('#save-record').disabled=true;$('#cancel-editor').disabled=true;$('#discard').disabled=true;for(const input of form.querySelectorAll('input,select,textarea'))input.disabled=true;
  try{
    // Compress before creating a draft, so unsupported phone photos leave no empty record.
-   const prepared={};for(const g of groups){prepared[g]=[];for(let i=0;i<queued[g].length;i++){$('#editor-status').textContent=`Preparing ${g} photo ${i+1}…`;prepared[g].push(await mobileImage(queued[g][i]));}}
+   const prepared={};for(const g of groups){prepared[g]=[];for(let i=0;i<queued[g].length;i++){$('#editor-status').textContent=`Preparing ${g} photo ${i+1}…`;prepared[g].push(await mobileImage(queued[g][i],stage=>{$('#editor-status').textContent=`${stage} ${g} photo ${i+1}…`;}));}}
    if(!base){$('#editor-status').textContent='Creating activity…';draft=(await api('records',{method:'POST',body:JSON.stringify(fields)})).record;}
    let current=editing||draft;
-   for(const g of groups){while(prepared[g].length){$('#editor-status').textContent=`Uploading ${g} photo…`;const result=await api('upload?'+new URLSearchParams({date:current.date,id:current.id,group:g,editBatch:editSession}),{method:'POST',body:prepared[g][0],headers:{'Content-Type':'image/webp'}});current=result.record;if(editing)editing=current;else draft=current;prepared[g].shift();queued[g].shift();}}
+   for(const g of groups){while(prepared[g].length){$('#editor-status').textContent=`Uploading ${g} photo…`;const result=await api('upload?'+new URLSearchParams({date:current.date,id:current.id,group:g,editBatch:editSession}),{method:'POST',body:prepared[g][0],headers:{'Content-Type':prepared[g][0].type}});current=result.record;if(editing)editing=current;else draft=current;prepared[g].shift();queued[g].shift();}}
    $('#editor-status').textContent='Saving photo evidence…';await api('record?'+new URLSearchParams({date:current.date,id:current.id}),{method:'PUT',body:JSON.stringify({...fields,updatedAt:current.updatedAt,publish:true,editBatch:editSession,removeImageIds:[...removed]})});
    sessionStorage.removeItem('cleaning-edit:'+current.id);draft=null;editing=null;busy=false;$('#editor').close();resetPreviews();state.month=fields.date.slice(0,7);await load();
  }catch(err){$('#editor-status').textContent=err.message+' Uploaded photos are retained so you can retry.';groups.forEach(drawPreview);}

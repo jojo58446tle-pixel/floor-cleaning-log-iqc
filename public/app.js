@@ -9,7 +9,7 @@ let loadGeneration = 0, viewerPhotos = [], viewerIndex = 0, zoom = 1, editing = 
 let editSession = null;
 let queued = {before:[],after:[],additional:[]}, removed = new Set(), previewUrls = [];
 const titles = {calendar:'Cleaning calendar',gallery:'Photo evidence gallery',statistics:'Cleaning statistics',area:'IQC cleaning areas',about:'About this log'};
-const imageUrl = (r,p,size='thumb') => `/api/image?${new URLSearchParams({date:r.date,id:r.id,photo:p.id,size})}`;
+const imageUrl = (r,p,size='thumb') => `/api/image?${new URLSearchParams({date:r.date,id:r.id,photo:p.id,size,v:'2'})}`;
 function photos(records=state.records) {return records.filter(r=>r.published).flatMap(r=>groups.flatMap(g=>r[g+'Images'].map(p=>({r,p,group:g}))));}
 async function api(path,options={}) {
  const headers = {...(options.body && typeof options.body==='string'?{'Content-Type':'application/json'}:{}),...(options.method && options.method!=='GET'?{'X-CSRF-Token':state.csrf||''}:{}),...options.headers};

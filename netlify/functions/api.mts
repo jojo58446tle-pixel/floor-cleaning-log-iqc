@@ -174,7 +174,7 @@ export default async (req: Request, context: Context) => {
       if (!photo) fail('Photo not found.', 404);
       const image = await store.get(url.searchParams.get('size') === 'thumb' ? photo.thumbKey : photo.fullKey, { type: 'arrayBuffer' });
       if (!image) fail('Photo not found.', 404);
-      return new Response(image, { headers: { 'Content-Type': 'image/webp', 'Cache-Control': session ? 'no-store' : 'public, max-age=60', 'Vary': 'Cookie', 'Netlify-Vary': 'cookie=__Host-cleaning', 'X-Content-Type-Options': 'nosniff' } });
+      return new Response(image, { headers: { 'Content-Type': 'image/webp', 'Cache-Control': 'no-store', 'Netlify-CDN-Cache-Control': 'no-store', 'Vary': 'Cookie', 'Netlify-Vary': 'query=date|id|photo|size|v, cookie=__Host-cleaning', 'X-Content-Type-Options': 'nosniff' } });
     }
     if (action === 'statistics' && req.method === 'GET') {
       const end = url.searchParams.get('month') || '';

@@ -24,7 +24,7 @@ test('Dashboard is the only navigation page; Calendar, Detail and Image Viewer w
  await w.eval('(async()=>{'+script+'})()');
  d.querySelector('#month').value='2026-10';d.querySelector('#month').dispatchEvent(new w.Event('change'));await until(()=>d.querySelector('[data-date="2026-10-07"]'));
  assert.equal(d.querySelectorAll('[data-date]').length,31);assert.equal(d.querySelector('#add').hidden,true);
- assert.ok([...d.querySelectorAll('.calendar img')].every(img=>img.src.includes('size=thumb')));
+ assert.ok([...d.querySelectorAll('.calendar img')].every(img=>img.src.includes('size=thumb')&&img.src.includes('v=2')));
  d.querySelector('[data-date="2026-10-07"]').click();await until(()=>d.querySelector('.detail-record'));
  assert.equal(d.querySelector('#detail').open,true);assert.equal(d.querySelectorAll('.detail-photos img').length,2);assert.equal(d.querySelectorAll('.evidence section').length,1);assert.ok(!d.querySelector('#detail-content').textContent.includes('START / FINISH'));
  assert.equal(d.querySelector('[data-edit]'),null);

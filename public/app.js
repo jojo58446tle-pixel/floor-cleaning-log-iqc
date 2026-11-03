@@ -7,6 +7,10 @@ const monthName = m => new Date(m+'-01T12:00:00').toLocaleDateString('en-GB',{mo
 let state = {page:'calendar',month:today().slice(0,7),records:[],settings:{areas:[],holidays:[]},admin:false,csrf:null,summary:null};
 let loadGeneration = 0, viewerPhotos = [], viewerIndex = 0, zoom = 1, editing = null, draft = null, busy = false;
 let activeMonthLoad = null;
+// Keep recently viewed public calendars, including their decoded image elements.
+// Returning to a month should not blank the dashboard or restart every photo.
+const monthViews = new Map();
+const monthViewTTL = 60000;
 let editSession = null;
 let queued = {before:[],after:[],additional:[]}, removed = new Set(), previewUrls = [];
 const titles = {calendar:'Cleaning calendar',gallery:'Photo evidence gallery',statistics:'Cleaning statistics',area:'IQC cleaning areas',about:'About this log'};
@@ -16,7 +20,9 @@ function photos(records=state.records) {return (Array.isArray(records)?records:[
 async function api(path,options={}) {
  const headers = {...(options.body && typeof options.body==='string'?{'Content-Type':'application/json'}:{}),...(options.method && options.method!=='GET'?{'X-CSRF-Token':state.csrf||''}:{}),...options.headers};
  const res = await fetch('/api/'+path,{credentials:'same-origin',...options,headers});
- let body;try{body=await res.json();}catch{throw new Error('API returned HTTP '+res.status+' without JSON. Check the Netlify Functions deployment.');} if(!res.ok) throw new Error(body.error || 'Request failed.'); return body;
+ let body;try{body=await res.json();}catch{throw new Error('API returned HTTP '+res.status+' without JSON. Check the Netlify Functions deployment.');} if(!res.ok) throw new Error(body.error || 'Request failed.');
+ if(options.method&&options.method!=='GET')monthViews.clear();
+ return body;
 }
 function notice(message){$('#message').hidden=!message;$('#message').textContent=message||'';}
 function options(values,first){return (first?`<option value="">${esc(first)}</option>`:'')+values.map(v=>`<option>${esc(v)}</option>`).join('');}
@@ -30,15 +36,22 @@ function summary(){
  const s=state.summary;if(!s){$('#summary').innerHTML='';return;}
  $('#summary').innerHTML=[['Cleaning Days',s.cleaningDays,'Days with published evidence'],['Total Activities',s.totalActivities,'Published cleaning records'],['Cleaning Rate',s.cleaningRate+'%',`${s.cleaningDays} / ${s.daysInMonth} calendar days`],['Areas Cleaned',s.areasCleaned,'Distinct areas this month'],['Photos Uploaded',s.photosUploaded,'Before, After & Additional']].map(([label,value,hint])=>`<article><span class="label">${label}</span><strong>${value}</strong><small>${hint}</small></article>`).join('');
 }
-async function load(){
+async function load(force=false){
  const generation=++loadGeneration;
  activeMonthLoad?.abort();
- const controller=new AbortController();activeMonthLoad=controller;
- let timedOut=false;
- const timeout=setTimeout(()=>{timedOut=true;controller.abort();},15000);
+ activeMonthLoad=null;
  const month=state.month;
  notice('');$('#month').value=month;$('#page-title').textContent=titles[state.page];
  $('nav').querySelectorAll('button').forEach(b=>b.classList.toggle('active',b.dataset.page===state.page));
+ const cached=!force&&!state.admin&&state.page==='calendar'&&monthViews.get(month);
+ if(cached&&Date.now()-cached.savedAt<monthViewTTL){
+  state.records=cached.records;state.summary=cached.summary;state.settings=cached.settings;
+  summary();$('#content').replaceChildren(...cached.nodes);return;
+ }
+ const controller=new AbortController();activeMonthLoad=controller;
+ let timedOut=false;
+ const timeout=setTimeout(()=>{timedOut=true;controller.abort();},15000);
+ $('#summary').innerHTML='';
  $('#content').innerHTML='<div class="panel empty-state">Loading cleaning records…</div>';
  try{
   const [data,settings]=await Promise.all([api('records?month='+month,{signal:controller.signal}),api('settings',{signal:controller.signal})]);
@@ -47,12 +60,17 @@ async function load(){
   state.summary=data?.summary||null;
   state.settings={areas:Array.isArray(settings?.areas)?settings.areas:[],holidays:Array.isArray(settings?.holidays)?settings.holidays:[]};
   summary();await render(generation);
+  if(generation===loadGeneration&&!state.admin&&state.page==='calendar'){
+   monthViews.delete(month);
+   monthViews.set(month,{records:state.records,summary:state.summary,settings:state.settings,nodes:[...$('#content').childNodes],savedAt:Date.now()});
+   if(monthViews.size>6)monthViews.delete(monthViews.keys().next().value);
+  }
  }catch(e){
   if(generation!==loadGeneration)return;
   notice(timedOut?'Loading took too long. Please retry.':e?.message||'Unable to load this month.');
   $('#summary').innerHTML='';
   $('#content').innerHTML='<div class="panel empty-state"><strong>Records could not be loaded</strong><p>Please retry. No results have been assumed.</p><button id="retry">Retry</button></div>';
-  $('#retry').onclick=load;
+  $('#retry').onclick=()=>load(true);
  }finally{clearTimeout(timeout);if(activeMonthLoad===controller)activeMonthLoad=null;}
 }
 async function render(generation=loadGeneration){
@@ -190,5 +208,5 @@ document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>$('#'+b.datas
 $('#login-form').onsubmit=async e=>{e.preventDefault();const button=e.target.querySelector('button');button.disabled=true;$('#login-error').textContent='';try{const data=await api('auth/login',{method:'POST',body:JSON.stringify({password:e.target.elements.password.value})});state.admin=data.authenticated;state.csrf=data.csrf;e.target.reset();$('#login').close();authUI();await load();}catch(err){$('#login-error').textContent=err.message;}finally{button.disabled=false;}};
 document.querySelectorAll('[data-page]').forEach(b=>b.onclick=()=>{state.page=b.dataset.page;load();});
 function moveMonth(step){const [y,m]=state.month.split('-').map(Number);const d=new Date(Date.UTC(y,m-1+step,1));const next=d.toISOString().slice(0,7);if(next<'2000-01'||next>'2199-12')return;state.month=next;load();}
-$('#previous').onclick=()=>moveMonth(-1);$('#next').onclick=()=>moveMonth(1);$('#today').onclick=()=>{state.month=today().slice(0,7);load();};$('#month').onchange=e=>{if(/^\d{4}-(0[1-9]|1[0-2])$/.test(e.target.value)&&e.target.value>='2000-01'&&e.target.value<='2199-12'){state.month=e.target.value;load();}};
+$('#previous').onclick=()=>moveMonth(-1);$('#next').onclick=()=>moveMonth(1);$('#today').onclick=()=>{state.month=today().slice(0,7);load(true);};$('#month').onchange=e=>{if(/^\d{4}-(0[1-9]|1[0-2])$/.test(e.target.value)&&e.target.value>='2000-01'&&e.target.value<='2199-12'){state.month=e.target.value;load();}};
 try{const session=await api('auth/session');state.admin=session.authenticated;state.csrf=session.csrf;}catch(e){notice(e.message);}authUI();await load();

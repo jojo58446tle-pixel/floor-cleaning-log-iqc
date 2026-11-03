@@ -141,3 +141,29 @@ test('Historical month with missing image groups still renders without crashing'
  assert.equal(d.querySelector('#message').hidden,true);
  dom.window.close();
 });
+
+test('Returning to October restores the same loaded photos without a network wait; writes invalidate it',async()=>{
+ const dom=new JSDOM(html,{url:'https://cleaning.example/',runScripts:'outside-only'}),w=dom.window,d=w.document;
+ const requests=[];let block=false;
+ w.fetch=async(path,opts={})=>{
+  requests.push(path);
+  if(block&&path.startsWith('/api/records?'))return new Promise(()=>{});
+  const data=path==='/api/auth/session'?{authenticated:false,csrf:null}:path==='/api/settings'?{areas:['IQC Lab Floor'],holidays:[]}:path.startsWith('/api/records?')?{records:[record],summary}:{ok:true};
+  return{ok:true,status:200,json:async()=>data};
+ };
+ await w.eval('(async()=>{'+script+';window.testApi=api;window.testLoad=load;})()');
+ const select=month=>{d.querySelector('#month').value=month;d.querySelector('#month').dispatchEvent(new w.Event('change'));};
+ select('2026-10');await until(()=>d.querySelector('[data-date="2026-10-07"]'));
+ const image=d.querySelector('.calendar img'),count=requests.length;
+ select('2026-09');await until(()=>d.querySelector('[data-date="2026-09-01"]'));
+ block=true;select('2026-10');
+ assert.equal(d.querySelector('.calendar img'),image);
+ assert.ok(d.querySelector('#content').textContent.includes('October 2026'));
+ assert.equal(requests.length,count+2);
+ assert.equal(d.querySelector('#message').hidden,true);
+ // All successful writes (including sign in/out and edits) discard cached views.
+ await w.testApi('auth/logout',{method:'POST'});
+ block=false;await w.testLoad();
+ assert.notEqual(d.querySelector('.calendar img'),image);
+ dom.window.close();
+});

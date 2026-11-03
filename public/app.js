@@ -6,11 +6,13 @@ const fmt = date => new Date(date+'T12:00:00').toLocaleDateString('en-GB',{day:'
 const monthName = m => new Date(m+'-01T12:00:00').toLocaleDateString('en-GB',{month:'long',year:'numeric'});
 let state = {page:'calendar',month:today().slice(0,7),records:[],settings:{areas:[],holidays:[]},admin:false,csrf:null,summary:null};
 let loadGeneration = 0, viewerPhotos = [], viewerIndex = 0, zoom = 1, editing = null, draft = null, busy = false;
+let activeMonthLoad = null;
 let editSession = null;
 let queued = {before:[],after:[],additional:[]}, removed = new Set(), previewUrls = [];
 const titles = {calendar:'Cleaning calendar',gallery:'Photo evidence gallery',statistics:'Cleaning statistics',area:'IQC cleaning areas',about:'About this log'};
 const imageUrl = (r,p,size='thumb') => `/api/image?${new URLSearchParams({date:r.date,id:r.id,photo:p.id,size,v:'2'})}`;
-function photos(records=state.records) {return records.filter(r=>r.published).flatMap(r=>groups.flatMap(g=>r[g+'Images'].map(p=>({r,p,group:g}))));}
+function photoGroup(record, group) {return Array.isArray(record?.[group+'Images'])?record[group+'Images'].filter(p=>p&&p.id):[];}
+function photos(records=state.records) {return (Array.isArray(records)?records:[]).filter(r=>r&&r.published).flatMap(r=>groups.flatMap(g=>photoGroup(r,g).map(p=>({r,p,group:g}))));}
 async function api(path,options={}) {
  const headers = {...(options.body && typeof options.body==='string'?{'Content-Type':'application/json'}:{}),...(options.method && options.method!=='GET'?{'X-CSRF-Token':state.csrf||''}:{}),...options.headers};
  const res = await fetch('/api/'+path,{credentials:'same-origin',...options,headers});
@@ -29,10 +31,29 @@ function summary(){
  $('#summary').innerHTML=[['Cleaning Days',s.cleaningDays,'Days with published evidence'],['Total Activities',s.totalActivities,'Published cleaning records'],['Cleaning Rate',s.cleaningRate+'%',`${s.cleaningDays} / ${s.daysInMonth} calendar days`],['Areas Cleaned',s.areasCleaned,'Distinct areas this month'],['Photos Uploaded',s.photosUploaded,'Before, After & Additional']].map(([label,value,hint])=>`<article><span class="label">${label}</span><strong>${value}</strong><small>${hint}</small></article>`).join('');
 }
 async function load(){
- const generation=++loadGeneration;notice('');$('#month').value=state.month;$('#page-title').textContent=titles[state.page];
+ const generation=++loadGeneration;
+ activeMonthLoad?.abort();
+ const controller=new AbortController();activeMonthLoad=controller;
+ let timedOut=false;
+ const timeout=setTimeout(()=>{timedOut=true;controller.abort();},15000);
+ const month=state.month;
+ notice('');$('#month').value=month;$('#page-title').textContent=titles[state.page];
  $('nav').querySelectorAll('button').forEach(b=>b.classList.toggle('active',b.dataset.page===state.page));
  $('#content').innerHTML='<div class="panel empty-state">Loading cleaning records…</div>';
- try{const [data,settings]=await Promise.all([api('records?month='+state.month),api('settings')]);if(generation!==loadGeneration)return;state.records=data.records;state.summary=data.summary;state.settings=settings;summary();await render(generation);}catch(e){if(generation!==loadGeneration)return;notice(e.message);$('#summary').innerHTML='';$('#content').innerHTML='<div class="panel empty-state"><strong>Records could not be loaded</strong><p>Please retry. No results have been assumed.</p><button id="retry">Retry</button></div>';$('#retry').onclick=load;}
+ try{
+  const [data,settings]=await Promise.all([api('records?month='+month,{signal:controller.signal}),api('settings',{signal:controller.signal})]);
+  if(generation!==loadGeneration)return;
+  state.records=Array.isArray(data?.records)?data.records.filter(r=>r&&typeof r.date==='string'):[];
+  state.summary=data?.summary||null;
+  state.settings={areas:Array.isArray(settings?.areas)?settings.areas:[],holidays:Array.isArray(settings?.holidays)?settings.holidays:[]};
+  summary();await render(generation);
+ }catch(e){
+  if(generation!==loadGeneration)return;
+  notice(timedOut?'Loading took too long. Please retry.':e?.message||'Unable to load this month.');
+  $('#summary').innerHTML='';
+  $('#content').innerHTML='<div class="panel empty-state"><strong>Records could not be loaded</strong><p>Please retry. No results have been assumed.</p><button id="retry">Retry</button></div>';
+  $('#retry').onclick=load;
+ }finally{clearTimeout(timeout);if(activeMonthLoad===controller)activeMonthLoad=null;}
 }
 async function render(generation=loadGeneration){
  if(state.page==='calendar')calendar();if(state.page==='gallery')gallery();if(state.page==='area')areas();if(state.page==='about')about();if(state.page==='statistics')await statistics(generation);
@@ -41,7 +62,7 @@ function calendar(){
  const [year,month]=state.month.split('-').map(Number),offset=(new Date(year,month-1,1).getDay()+6)%7,days=new Date(year,month,0).getDate();
  let cells='';for(let i=0;i<offset;i++)cells+='<div class="day empty" aria-hidden="true"></div>';
  for(let day=1;day<=days;day++){
-   const date=`${state.month}-${String(day).padStart(2,'0')}`,rows=state.records.filter(r=>r.date===date),published=rows.filter(r=>r.published),r=published[0]||rows[0],p=r&&(r.afterImages[0]||r.beforeImages[0]);
+   const date=`${state.month}-${String(day).padStart(2,'0')}`,rows=state.records.filter(r=>r.date===date),published=rows.filter(r=>r.published),r=published[0]||rows[0],p=r&&(photoGroup(r,'after')[0]||photoGroup(r,'before')[0]);
    cells+=`<button class="day ${rows.length?'has-record':''} ${date===today()?'today':''} ${state.settings.holidays.includes(date)?'holiday':''}" data-date="${date}" aria-label="${esc(fmt(date))}, ${published.length} published activities"><span class="number">${day}${date===today()?'<small>Today</small>':''}</span>${r?`${p?`<img class="thumb" src="${imageUrl(r,p)}" alt="${esc(r.area)} photo evidence" loading="lazy" decoding="async">`:''}<span class="activity">${esc(r.activityType)}</span><span class="area">${esc(r.area)}</span><span class="badge ${r.published?'':'draft'}">${r.published?'✓ Cleaned':'Draft · Not public'}</span>${rows.length>1?`<span class="count">${rows.length} Activities</span>`:''}`:`<span class="no-activity">${state.settings.holidays.includes(date)?'Holiday':'No activity'}</span>`}</button>`;
  }
  const trailing=(7-(offset+days)%7)%7;
@@ -72,7 +93,7 @@ async function openDetail(date){
  try{const rows=state.records.filter(r=>r.date===date);if(!rows.length){$('#detail-content').innerHTML=`<div class="empty-state"><strong>No recorded activity</strong>There is no cleaning evidence for this date.</div>${state.admin?'<button id="add-on-date" class="primary">+ Add activity</button>':''}`;$('#add-on-date')?.addEventListener('click',()=>{dialog.close();openEditor(null,date);});return;}
  const records=await Promise.all(rows.map(r=>api('record?'+new URLSearchParams({date,id:r.id})).then(x=>x.record)));
  const all=photos(records);if(state.admin){all.splice(0,all.length,...records.flatMap(r=>groups.flatMap(group=>r[group+'Images'].map(p=>({r,p,group})))));}
- $('#detail-content').innerHTML=records.map(r=>`<article class="detail-record"><h3>${esc(r.activityType)}</h3><span class="badge ${r.published?'':'draft'}">${r.published?'✓ Cleaned':'Draft · Not public'}</span><div class="details-grid"><div><small>AREA</small>${esc(r.area)}</div><div><small>DATE</small>${fmt(r.date)}</div></div><p class="note">${esc(r.note||'No additional notes.')}</p><div class="evidence"><section><h4>Cleaning photos / ภาพทำความสะอาด</h4><div class="detail-photos">${groups.flatMap(g=>r[g+'Images']).map(p=>`<button data-image="${all.findIndex(x=>x.p.id===p.id)}"><img src="${imageUrl(r,p,'full')}" alt="${esc('Cleaning photo — '+r.area)}" loading="lazy" decoding="async"></button>`).join('')||'<span class="muted">No photos</span>'}</div></section></div>${state.admin?`<div class="detail-actions"><button data-edit="${r.id}" class="primary">Edit activity / แก้ไขรูป</button><button class="danger" data-delete="${r.id}">Delete activity</button></div>`:''}</article>`).join('');
+ $('#detail-content').innerHTML=records.map(r=>`<article class="detail-record"><h3>${esc(r.activityType)}</h3><span class="badge ${r.published?'':'draft'}">${r.published?'✓ Cleaned':'Draft · Not public'}</span><div class="details-grid"><div><small>AREA</small>${esc(r.area)}</div><div><small>DATE</small>${fmt(r.date)}</div></div><p class="note">${esc(r.note||'No additional notes.')}</p><div class="evidence"><section><h4>Cleaning photos / ภาพทำความสะอาด</h4><div class="detail-photos">${groups.flatMap(g=>photoGroup(r,g)).map(p=>`<button data-image="${all.findIndex(x=>x.p.id===p.id)}"><img src="${imageUrl(r,p,'full')}" alt="${esc('Cleaning photo — '+r.area)}" loading="lazy" decoding="async"></button>`).join('')||'<span class="muted">No photos</span>'}</div></section></div>${state.admin?`<div class="detail-actions"><button data-edit="${r.id}" class="primary">Edit activity / แก้ไขรูป</button><button class="danger" data-delete="${r.id}">Delete activity</button></div>`:''}</article>`).join('');
  $('#detail-content').querySelectorAll('[data-image]').forEach(b=>b.onclick=()=>openViewer(all,Number(b.dataset.image)));
  $('#detail-content').querySelectorAll('[data-edit]').forEach(b=>b.onclick=()=>{dialog.close();openEditor(records.find(r=>r.id===b.dataset.edit));});
  $('#detail-content').querySelectorAll('[data-delete]').forEach(b=>b.onclick=async()=>{if(!confirm('Delete this activity and all its photo evidence permanently?'))return;const r=records.find(r=>r.id===b.dataset.delete);b.disabled=true;try{await api('record?'+new URLSearchParams({date:r.date,id:r.id}),{method:'DELETE'});dialog.close();await load();}catch(e){b.disabled=false;notice(e.message);}});

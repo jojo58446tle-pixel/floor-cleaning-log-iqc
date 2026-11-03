@@ -104,3 +104,15 @@ test('One photo in any group publishes; the last published photo cannot be remov
   assert.equal((await(await call('record?'+ref)).json()).record[group+'Images'].length,1);
  }
 });
+
+test('Month and record API responses cannot be mixed by the shared CDN cache',async()=>{
+ const {ref}=await publishedFixture();
+ for(const path of ['records?month=2026-10','records?month=2026-11','record?'+ref,'settings']){
+  const res=await call(path);
+  assert.equal(res.status,200);
+  assert.equal(res.headers.get('cache-control'),'no-store');
+  assert.equal(res.headers.get('netlify-cdn-cache-control'),'no-store');
+  assert.match(res.headers.get('netlify-vary'),/^query, cookie=/);
+  if(path.startsWith('records?'))assert.equal((await res.json()).records.length,path.endsWith('10')?1:0);
+ }
+});

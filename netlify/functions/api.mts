@@ -5,8 +5,10 @@ import { DEFAULT_AREAS, GROUPS, images, recordKey, summary, validDate, validMont
 import { cookieHeader, makeSession, readSession, sameOrigin, adminPasswordConfigured, verifyAdminPassword } from '../lib/auth.ts';
 import { optimizeImage } from '../lib/image.ts';
 
-function json(data: unknown, status = 200, cache = false, extra = {}) {
-  return Response.json(data, { status, headers: { 'Cache-Control': cache ? 'public, max-age=0, must-revalidate' : 'no-store', 'Netlify-CDN-Cache-Control': cache ? 'public, s-maxage=15' : 'no-store', 'Vary': 'Cookie', 'Netlify-Vary': 'cookie=__Host-cleaning', ...extra } });
+function json(data: unknown, status = 200, _cache = false, extra = {}) {
+  // Calendar and record responses must never reuse another query's evidence.
+  // Recent calendars are retained by the client; shared API caching is disabled.
+  return Response.json(data, { status, headers: { 'Cache-Control': 'no-store', 'Netlify-CDN-Cache-Control': 'no-store', 'Vary': 'Cookie', 'Netlify-Vary': 'query, cookie=__Host-cleaning', ...extra } });
 }
 function fail(message: string, status = 400): never { throw Object.assign(new Error(message), { status }); }
 function viewRecord(record: RecordData, batch = '') {

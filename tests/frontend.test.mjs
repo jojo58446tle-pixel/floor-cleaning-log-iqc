@@ -120,3 +120,24 @@ test('unreadable image reports actionable HEIC guidance and revokes decode URL',
  const h=await compressionHarness(()=>null,{bitmapFails:true});h.w.Image=class{set src(v){if(v)queueMicrotask(()=>this.onerror(Error('decode')));}};
  await assert.rejects(h.run(),/HEIC\/HEIF/);assert.equal(h.revoked(),1);h.dom.window.close();
 });
+
+test('Historical month with missing image groups still renders without crashing',async()=>{
+ const dom=new JSDOM(html,{url:'https://cleaning.example/',runScripts:'outside-only'}),w=dom.window,d=w.document;
+ const oldRecord={...record,beforeImages:null,afterImages:null,additionalImages:null};
+ w.HTMLDialogElement.prototype.showModal=function(){this.open=true;};
+ w.HTMLDialogElement.prototype.close=function(){this.open=false;this.dispatchEvent(new w.Event('close'));};
+ w.fetch=async path=>{
+  let data;
+  if(path==='/api/auth/session')data={authenticated:false,csrf:null};
+  else if(path==='/api/settings')data={areas:['IQC Lab Floor'],holidays:[]};
+  else if(path.startsWith('/api/records?'))data={records:path.includes('2026-10')?[oldRecord]:[],summary};
+  else throw new Error('Unexpected request '+path);
+  return{ok:true,status:200,json:async()=>data};
+ };
+ await w.eval('(async()=>{'+script+'})()');
+ d.querySelector('#month').value='2026-10';d.querySelector('#month').dispatchEvent(new w.Event('change'));
+ await until(()=>d.querySelector('[data-date="2026-10-07"]'));
+ assert.ok(d.querySelector('[data-date="2026-10-07"].has-record'));
+ assert.equal(d.querySelector('#message').hidden,true);
+ dom.window.close();
+});
